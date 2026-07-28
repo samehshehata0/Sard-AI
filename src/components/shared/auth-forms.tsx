@@ -2,6 +2,7 @@
 
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useForm } from "react-hook-form";
 import { useState } from "react";
 import { z } from "zod";
@@ -13,12 +14,15 @@ import { authService } from "@/services/auth-service";
 import type { UserRole } from "@/types/user";
 
 export function LoginForm() {
+  const router = useRouter();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "", remember: true } });
+  const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "" } });
   async function submit(values: z.infer<typeof loginSchema>) {
     setSubmitError(null);
     try {
       await authService.login(values);
+      router.replace("/dashboard");
+      router.refresh();
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "تعذر تسجيل الدخول.");
     }
@@ -34,7 +38,7 @@ export function LoginForm() {
         </Field>
         <div className="flex items-center justify-between gap-4 text-sm">
           <label className="inline-flex items-center gap-2 font-bold text-muted-foreground">
-            <input type="checkbox" {...form.register("remember")} className="h-4 w-4 rounded border-border accent-primary" />
+            <input type="checkbox" defaultChecked className="h-4 w-4 rounded border-border accent-primary" />
             تذكرني
           </label>
           <Link href="/login" className="font-bold text-primary">نسيت كلمة المرور؟</Link>
@@ -52,13 +56,22 @@ export function LoginForm() {
 }
 
 export function RegisterForm() {
+  const router = useRouter();
   const [submitError, setSubmitError] = useState<string | null>(null);
   const form = useForm<z.infer<typeof registerSchema>>({ resolver: zodResolver(registerSchema), defaultValues: { fullName: "", email: "", password: "", confirmPassword: "", role: "طالب معلم" } });
   async function submit(values: z.infer<typeof registerSchema>) {
     const roles: Record<string, UserRole> = { "طالب معلم": "student_teacher", "عضو هيئة تدريس": "faculty_member", "مشرف": "supervisor" };
     setSubmitError(null);
     try {
-      await authService.register({ fullName: values.fullName, email: values.email, password: values.password, role: roles[values.role] });
+      await authService.register({
+        fullName: values.fullName,
+        email: values.email,
+        password: values.password,
+        confirmPassword: values.confirmPassword,
+        role: roles[values.role],
+      });
+      router.replace("/dashboard");
+      router.refresh();
     } catch (error) {
       setSubmitError(error instanceof Error ? error.message : "تعذر إنشاء الحساب.");
     }

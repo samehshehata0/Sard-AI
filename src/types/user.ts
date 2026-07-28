@@ -1,10 +1,11 @@
 export type UserRole = "student_teacher" | "faculty_member" | "supervisor";
+export type AuthenticatedUserRole = UserRole | "admin";
 
 export interface User {
   id: string;
   fullName: string;
   email: string;
-  role: UserRole;
+  role: AuthenticatedUserRole;
   institution: string | null;
   avatarUrl: string | null;
   createdAt: string;
