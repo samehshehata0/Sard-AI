@@ -2,9 +2,10 @@ import { Search } from "lucide-react";
 import { AppShell } from "@/components/layout/app-shell";
 import { StoryCard } from "@/components/shared/story-card";
 import { SectionTitle } from "@/components/ui/card";
-import { stories } from "@/lib/constants/stories-data";
+import { projectsService } from "@/services/projects-service";
 
-export default function HistoryPage() {
+export default async function HistoryPage() {
+  const stories = await projectsService.getCards();
   return (
     <AppShell title="السجل">
       <div className="space-y-6">

@@ -3,9 +3,11 @@ import { AppShell } from "@/components/layout/app-shell";
 import { ReportScoreCard } from "@/components/reports/report-score-card";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card, SectionTitle } from "@/components/ui/card";
-import { report } from "@/lib/constants/report-data";
+import { reportsService } from "@/services/reports-service";
 
-export default function ReportsPage() {
+export default async function ReportsPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const report = await reportsService.getByProjectId(id);
   return (
     <AppShell title="التقارير">
       <div className="space-y-6">

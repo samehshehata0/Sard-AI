@@ -2,13 +2,15 @@ import { AppShell } from "@/components/layout/app-shell";
 import dynamic from "next/dynamic";
 import { MediaSkeleton } from "@/components/shared/route-skeleton";
 import { Card, SectionTitle } from "@/components/ui/card";
-import { scenes } from "@/lib/constants/scenes-data";
+import { projectsService } from "@/services/projects-service";
 
 const AudioPlayerCard = dynamic(() => import("@/components/media/audio-player-card").then((mod) => mod.AudioPlayerCard), {
   loading: () => <MediaSkeleton />,
 });
 
-export default function AudioPage() {
+export default async function AudioPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const scenes = await projectsService.getScenes(id);
   return (
     <AppShell title="التعليق الصوتي">
       <div className="grid gap-6 xl:grid-cols-[1fr_380px]">

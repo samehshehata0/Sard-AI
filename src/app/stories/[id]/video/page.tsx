@@ -2,13 +2,15 @@ import { AppShell } from "@/components/layout/app-shell";
 import dynamic from "next/dynamic";
 import { MediaSkeleton } from "@/components/shared/route-skeleton";
 import { Card, SectionTitle } from "@/components/ui/card";
-import { scenes } from "@/lib/constants/scenes-data";
+import { projectsService } from "@/services/projects-service";
 
 const VideoPlayerCard = dynamic(() => import("@/components/media/video-player-card").then((mod) => mod.VideoPlayerCard), {
   loading: () => <MediaSkeleton />,
 });
 
-export default function VideoPage() {
+export default async function VideoPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  const scenes = await projectsService.getScenes(id);
   return (
     <AppShell title="الفيديو">
       <div className="grid gap-6 xl:grid-cols-[1fr_360px]">
