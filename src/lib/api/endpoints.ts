@@ -6,6 +6,7 @@ export const endpoints = {
     login: "/api/auth/login",
     logout: "/api/auth/logout",
     me: "/api/auth/me",
+    profile: "/api/auth/profile",
   },
   projects: {
     collection: "/api/projects",

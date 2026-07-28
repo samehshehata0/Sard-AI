@@ -4,6 +4,7 @@ export interface RegisterRequest {
   fullName: string;
   email: string;
   password: string;
+  confirmPassword: string;
   role: UserRole;
   institution?: string;
 }
@@ -11,7 +12,6 @@ export interface RegisterRequest {
 export interface LoginRequest {
   email: string;
   password: string;
-  remember?: boolean;
 }
 
 export interface AuthResponse {

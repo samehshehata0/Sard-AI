@@ -1,12 +1,12 @@
 import { endpoints } from "@/lib/api/endpoints";
-import { apiRequest, isApiConfigured } from "@/services/api-client";
-import { mockUser } from "@/services/mock-data";
+import { apiRequest } from "@/services/api-client";
 import type { AuthResponse, LoginRequest, RegisterRequest } from "@/types/auth";
-import type { User } from "@/types/user";
+import type { UpdateUserInput, User } from "@/types/user";
 
 export const authService = {
-  register: (input: RegisterRequest) => isApiConfigured ? apiRequest<AuthResponse>(endpoints.auth.register, { method: "POST", body: input }) : Promise.resolve({ user: mockUser }),
-  login: (input: LoginRequest) => isApiConfigured ? apiRequest<AuthResponse>(endpoints.auth.login, { method: "POST", body: input }) : Promise.resolve({ user: mockUser }),
-  logout: () => isApiConfigured ? apiRequest<void>(endpoints.auth.logout, { method: "POST" }) : Promise.resolve(),
-  me: (): Promise<User> => isApiConfigured ? apiRequest<User>(endpoints.auth.me) : Promise.resolve(mockUser),
+  register: (input: RegisterRequest) => apiRequest<AuthResponse>(endpoints.auth.register, { method: "POST", body: input }),
+  login: (input: LoginRequest) => apiRequest<AuthResponse>(endpoints.auth.login, { method: "POST", body: input }),
+  logout: () => apiRequest<void>(endpoints.auth.logout, { method: "POST" }),
+  me: (): Promise<User> => apiRequest<User>(endpoints.auth.me),
+  updateProfile: (input: UpdateUserInput): Promise<User> => apiRequest<User>(endpoints.auth.profile, { method: "PATCH", body: input }),
 };

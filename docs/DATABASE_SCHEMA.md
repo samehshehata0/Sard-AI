@@ -17,6 +17,21 @@ MongoDB collection names use Mongoose defaults (`users`, `projects`, `generation
 
 Index: unique ascending `email` (`users_email_unique`).
 
+## AuthSession
+
+| Field | Type | Rules |
+|---|---|---|
+| `userId` | ObjectId | required, references User |
+| `tokenHash` | string | required, unique HMAC digest; raw cookie token is never stored |
+| `expiresAt` | date | required, checked on every session lookup |
+| `createdAt`, `updatedAt` | date | automatic |
+
+Indexes:
+
+- Unique `{ tokenHash: 1 }` (`auth_sessions_token_unique`).
+- TTL `{ expiresAt: 1 }` (`auth_sessions_expiry_ttl`).
+- `{ userId: 1 }` (`auth_sessions_user`) for revoking a user's sessions.
+
 ## Project
 
 Contains the requested educational inputs, `audio|video` requested outputs, provider output URLs, error state, and status:

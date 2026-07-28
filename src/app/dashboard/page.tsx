@@ -5,12 +5,12 @@ import { AppShell } from "@/components/layout/app-shell";
 import { StoryCard } from "@/components/shared/story-card";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
-import { authService } from "@/services/auth-service";
+import { requireUser } from "@/server/auth/session";
 import { mockDashboardStats } from "@/services/mock-data";
 import { projectsService } from "@/services/projects-service";
 
 export default async function DashboardPage() {
-  const [user, stories] = await Promise.all([authService.me(), projectsService.getCards()]);
+  const [user, stories] = await Promise.all([requireUser(), projectsService.getCards()]);
   return (
     <AppShell title="لوحة التحكم">
       <div className="space-y-6">

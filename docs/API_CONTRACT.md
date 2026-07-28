@@ -6,7 +6,7 @@ This contract covers the MVP backend consumed by the existing Arabic RTL fronten
 
 - Base URL: `NEXT_PUBLIC_API_URL` + `/api`
 - Content type: `application/json; charset=utf-8`
-- Authentication: secure HTTP-only session cookie is preferred. `Authorization: Bearer <token>` may be supported for non-browser clients.
+- Authentication: opaque, revocable server-side session using the `sard_session` HTTP-only cookie. Bearer tokens and browser storage are not used.
 - Dates: ISO 8601 UTC strings.
 - IDs: opaque non-empty strings. Clients must not infer type or ownership from an ID.
 - JSON field names: camelCase.
@@ -191,14 +191,16 @@ Request:
   "fullName": "سامح أحمد",
   "email": "sameh@university.edu",
   "password": "strong-password",
-  "role": "student_teacher",
-  "institution": "كلية التربية"
+  "confirmPassword": "strong-password",
+  "role": "student_teacher"
 }
 ```
 
-Response `201`: `{ "data": { "user": User } }`. An optional `accessToken` may be returned for token-based clients, but a browser session should use `Set-Cookie`.
+`role` accepts `student_teacher | faculty_member | supervisor`; public registration can never create an admin. Names accept Arabic and English Unicode letters, marks, spaces, apostrophes, periods, underscores, and hyphens. The password is 8–128 characters and must contain at least one letter and one digit.
 
-Errors: `400 VALIDATION_ERROR`, `409 EMAIL_ALREADY_EXISTS`, `429 RATE_LIMITED`.
+Response `201`: `{ "success": true, "data": { "user": User }, "message": "تم إنشاء الحساب بنجاح." }` and `Set-Cookie`.
+
+Errors: `400 VALIDATION_ERROR`, `409 CONFLICT`, `429 RATE_LIMITED`.
 
 ### `POST /api/auth/login`
 
@@ -207,26 +209,53 @@ Public.
 Request:
 
 ```json
-{ "email": "sameh@university.edu", "password": "strong-password", "remember": true }
+{ "email": "sameh@university.edu", "password": "strong-password" }
 ```
 
-Response `200`: `{ "data": { "user": User } }` and session cookie.
+Response `200`: `{ "success": true, "data": { "user": User }, "message": "تم تسجيل الدخول بنجاح." }` and session cookie. Unknown emails, wrong passwords, and inactive accounts all return the same Arabic message and status.
 
-Errors: `400 VALIDATION_ERROR`, `401 INVALID_CREDENTIALS`, `429 RATE_LIMITED`.
+Errors: `400 VALIDATION_ERROR`, `401 AUTHENTICATION_ERROR`, `429 RATE_LIMITED`.
 
 ### `POST /api/auth/logout`
 
-Authenticated. No body. Invalidates the current session.
+No body. Invalidates the current session when present and expires its cookie. The operation is safe to repeat.
 
-Response `204` with no body. Repeated logout may also return `204`.
+Response `200`: success envelope with `data: null`.
 
 ### `GET /api/auth/me`
 
 Authenticated.
 
-Response `200`: `{ "data": User }`.
+Response `200`: success envelope containing the sanitized User. `passwordHash` is never selected or serialized.
 
-Errors: `401 UNAUTHENTICATED`.
+Errors: `401 AUTHENTICATION_ERROR`.
+
+### `PATCH /api/auth/profile`
+
+Authenticated. At least one field is required:
+
+```json
+{
+  "fullName": "سامح أحمد",
+  "institution": "كلية التربية",
+  "avatarUrl": "https://cdn.example.com/avatar.jpg"
+}
+```
+
+`institution` and `avatarUrl` may be `null` to clear them. Email, role, activation state, password hash, and IDs cannot be changed through this endpoint.
+
+Response `200`: success envelope containing the updated sanitized User.
+
+Errors: `400 VALIDATION_ERROR`, `401 AUTHENTICATION_ERROR`, `404 NOT_FOUND`.
+
+### Session cookie
+
+- Name: `sard_session`.
+- Value: 256-bit opaque random token; only an HMAC-SHA-256 digest is stored in MongoDB.
+- Lifetime: 30 minutes.
+- Attributes: `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure` in production.
+- Expired/revoked/unknown tokens are treated as unauthenticated.
+- The session collection has a MongoDB TTL index for eventual cleanup. Every authorization check also compares `expiresAt`, so security does not depend on TTL cleanup timing.
 
 ## 5. Projects
 
@@ -246,7 +275,7 @@ Request:
   "learnerCharacteristics": "أمثلة بصرية وحوار قصير",
   "storyStyle": "حواري",
   "voiceTone": "مشجعة",
-  "requestedOutputs": ["text", "audio", "video"],
+  "requestedOutputs": ["audio", "video"],
   "prompt": "قصة عربية تعليمية مدتها أربع دقائق"
 }
 ```
@@ -380,8 +409,8 @@ Errors: `401 UNAUTHENTICATED`, `404 PROJECT_NOT_FOUND`, `404 REPORT_NOT_FOUND`, 
 | HTTP | Typical code | Meaning |
 |---|---|---|
 | 400 | `VALIDATION_ERROR` | Request fields or query parameters are invalid |
-| 401 | `UNAUTHENTICATED` | Missing, invalid, or expired session |
-| 403 | `FORBIDDEN` | Authenticated but role is not allowed |
+| 401 | `AUTHENTICATION_ERROR` | Missing, invalid, expired session, or generic invalid credentials |
+| 403 | `AUTHORIZATION_ERROR` | Authenticated but role is not allowed |
 | 404 | `*_NOT_FOUND` | Resource does not exist or is not visible |
 | 409 | `*_NOT_EDITABLE`, `*_ALREADY_ACTIVE` | Current resource state conflicts |
 | 413 | `PAYLOAD_TOO_LARGE` | JSON body exceeds server limit |

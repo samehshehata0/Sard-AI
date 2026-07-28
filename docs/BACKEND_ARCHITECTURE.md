@@ -21,6 +21,9 @@ Provider requests must originate from server-only modules. The browser only rece
 - `server/config/env.ts`: validates server configuration with Zod. Validation is lazy so static frontend builds remain possible, while every database/provider/auth entry point must call `getServerEnv()` before use.
 - `server/database/connection.ts`: caches both resolved connections and in-flight connection promises on `globalThis`. This prevents duplicate development connections and shares connection setup within a warm serverless instance.
 - `server/database/models/*`: Mongoose schemas, validation, timestamps, and indexes.
+- `server/auth/session.ts`: creates, resolves, requires, role-checks, and revokes database-backed sessions.
+- `server/auth/auth.service.ts`: password hashing, generic credential verification, registration, and profile updates.
+- `server/auth/rate-limit.ts`: basic per-instance login throttling keyed by client address and normalized email.
 - `server/errors/*`: operational error taxonomy and one response boundary for Zod, known, and unexpected errors.
 - `server/responses/api-response.ts`: consistent success/failure envelopes.
 - `server/validation/common.schemas.ts`: shared ObjectId/pagination validation and a bounded JSON reader.
@@ -28,6 +31,16 @@ Provider requests must originate from server-only modules. The browser only rece
 - `server/logging/logger.ts`: structured technical logs with recursive redaction of passwords, hashes, tokens, cookies, secrets, API keys, and prompts.
 
 All sensitive server modules import `server-only` to prevent accidental inclusion in client component graphs.
+
+## Authentication and authorization
+
+Passwords use bcrypt with cost factor 12. The browser receives a 256-bit opaque token in an HTTP-only `sard_session` cookie; MongoDB stores only an HMAC-SHA-256 digest created with `AUTH_SECRET`. Sessions expire after 30 minutes and are revocable on logout.
+
+`createSession`, `getCurrentUser`, `requireUser`, `requireRole`, and `clearSession` are the reusable session boundary. Public registration accepts only student teacher, faculty member, or supervisor; the `admin` role remains available for controlled administrative provisioning.
+
+The Next.js 16 `src/proxy.ts` performs only an optimistic cookie-presence redirect for protected page prefixes. It does not access MongoDB and does not treat the cookie as authoritative. Protected layouts resolve the session from MongoDB, and backend Route Handlers must independently call `requireUser`/`requireRole` and query owned resources with both their ID and authenticated `userId`.
+
+The in-memory login limiter provides immediate basic protection (five attempts per address/email window). Multi-instance production deployment should replace or supplement it with a shared Redis/database-backed limiter and trusted proxy configuration.
 
 ## API lifecycle
 
@@ -59,7 +72,7 @@ It returns HTTP `200` when MongoDB is connected and `503` when disconnected. It 
 - Raw Mongoose documents should never be returned directly; future handlers must map them to explicit DTOs.
 - Prompts, credentials, provider payloads, and tokens must not be logged.
 - Generation APIs should add persistent rate limiting, idempotency keys, active-job constraints, provider webhook signature verification, and retry caps.
-- Authentication should use secure, HTTP-only, same-site cookies and CSRF protection appropriate to deployment topology.
+- Authentication uses secure-in-production, HTTP-only, SameSite=Lax cookies. Same-site mutation endpoints must continue to reject cross-origin deployment patterns unless explicit CSRF protection is added.
 
 ## Environment and deployment
 
