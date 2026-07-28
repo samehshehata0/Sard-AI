@@ -15,14 +15,16 @@ This contract covers the MVP backend consumed by the existing Arabic RTL fronten
 Successful single-resource response:
 
 ```json
-{ "data": { "id": "project_123" } }
+{ "success": true, "data": { "id": "project_123" }, "message": "تم تنفيذ الطلب بنجاح." }
 ```
 
 Successful paginated response:
 
 ```json
 {
+  "success": true,
   "data": [],
+  "message": "تم تنفيذ الطلب بنجاح.",
   "meta": {
     "page": 1,
     "pageSize": 20,
@@ -36,6 +38,7 @@ Error response:
 
 ```json
 {
+  "success": false,
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "بعض البيانات غير صالحة.",
@@ -76,9 +79,9 @@ interface Project {
   learnerCharacteristics: string;
   storyStyle: string;
   voiceTone: string;
-  requestedOutputs: ("text" | "audio" | "video")[];
+  requestedOutputs: ("audio" | "video")[];
   prompt: string;
-  status: "draft" | "queued" | "processing" | "completed" | "failed" | "cancelled";
+  status: "draft" | "ready" | "processing" | "completed" | "partially_completed" | "failed";
   videoUrl: string | null;
   audioUrl: string | null;
   thumbnailUrl: string | null;
@@ -90,7 +93,7 @@ interface Project {
 
 Project status transitions:
 
-`draft → queued → processing → completed | failed | cancelled`. A failed project may return to `queued` after retry. `completed` means every requested output has completed. While jobs differ, the project is `processing`. `errorMessage` is non-null only for `failed`.
+`draft → ready → processing → completed | partially_completed | failed`. A failed project may return to `ready` after retry preparation. `completed` means every requested output has completed; `partially_completed` means one output succeeded and another failed. `errorMessage` is non-null only for failed outcomes.
 
 ### GenerationJob
 
@@ -168,7 +171,7 @@ interface ReportView extends Report {
 - `learnerAge`: 1–50 characters.
 - `educationLevel`, `storyStyle`, `voiceTone`: 1–100 characters.
 - `learnerCharacteristics`: 1–1,000 characters.
-- `requestedOutputs`: unique non-empty values. `text` may coexist with `audio`/`video`.
+- `requestedOutputs`: unique non-empty values from `audio | video`.
 - `prompt`: maximum 10,000 characters. The server constructs a safe prompt if omitted.
 - URL fields: absolute HTTPS URLs (HTTP may be accepted only in local development).
 - Assessment arrays: exactly the count defined by the versioned questionnaire; each integer is 1–5. The server calculates all scores; client-supplied scores are rejected.
