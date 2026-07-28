@@ -8,6 +8,8 @@ import { z } from "zod";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
 import { storyWizardSchema } from "@/lib/validations";
+import { projectsService } from "@/services/projects-service";
+import type { RequestedOutput } from "@/types/project";
 
 type WizardValues = z.infer<typeof storyWizardSchema>;
 
@@ -15,6 +17,7 @@ const steps = ["بيانات القصة", "الأهداف التعليمية", "
 
 export function WizardForm() {
   const [step, setStep] = useState(0);
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const form = useForm<WizardValues>({
     resolver: zodResolver(storyWizardSchema),
     defaultValues: {
@@ -46,6 +49,32 @@ export function WizardForm() {
     if (ok) setStep((current) => Math.min(current + 1, steps.length - 1));
   }
 
+  async function createProject(values: WizardValues) {
+    const outputMap: Record<string, RequestedOutput[]> = {
+      "نص فقط": ["text"],
+      "نص + صوت": ["text", "audio"],
+      "نص + صوت + فيديو": ["text", "audio", "video"],
+    };
+    setSubmitError(null);
+    try {
+      await projectsService.create({
+        title: values.title,
+        educationalTopic: values.topic,
+        learningObjectives: values.objectives,
+        learnerAge: values.age,
+        educationLevel: values.stage,
+        learnerCharacteristics: values.needs,
+        storyStyle: values.style,
+        voiceTone: values.tone,
+        requestedOutputs: outputMap[values.output] ?? ["text"],
+        prompt: `${values.topic} - ${values.duration} - مستوى ${values.level}`,
+      });
+      setStep(4);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "تعذر إنشاء المشروع.");
+    }
+  }
+
   return (
     <Card>
       <div className="grid gap-3 md:grid-cols-5">
@@ -63,9 +92,7 @@ export function WizardForm() {
 
       <form
         className="mt-8 space-y-6"
-        onSubmit={form.handleSubmit(() => {
-          setStep(4);
-        })}
+        onSubmit={form.handleSubmit(createProject)}
       >
         {step === 0 ? (
           <div className="grid gap-4 md:grid-cols-2">
@@ -162,8 +189,9 @@ export function WizardForm() {
               <Summary label="الأسلوب" value={values.style} />
               <Summary label="المخرجات" value={values.output} />
             </div>
-            <ArabicButton className="mt-6" icon={<WandSparkles className="h-4 w-4" />}>
-              توليد القصة
+            {submitError ? <p className="mt-4 text-sm font-bold text-destructive" role="alert">{submitError}</p> : null}
+            <ArabicButton className="mt-6" type="submit" disabled={form.formState.isSubmitting} icon={<WandSparkles className="h-4 w-4" />}>
+              {form.formState.isSubmitting ? "جارٍ التوليد..." : "توليد القصة"}
             </ArabicButton>
           </div>
         ) : null}

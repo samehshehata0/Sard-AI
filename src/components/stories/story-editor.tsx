@@ -1,16 +1,17 @@
 import { RefreshCw, Save, WandSparkles } from "lucide-react";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
-import { characters, objectives, storyContent, suggestions } from "@/lib/constants/editor-data";
+import type { StoryEditorData } from "@/types/project";
 
-export function StoryEditor() {
+export function StoryEditor({ data }: { data: StoryEditorData }) {
+  const { characters, objectives, storyContent, suggestions } = data;
   return (
     <div className="grid gap-6 xl:grid-cols-[1fr_320px]">
       <div className="space-y-6">
         <Card>
           <label className="block">
             <span className="mb-2 block text-sm font-bold text-muted-foreground">عنوان القصة</span>
-            <input className="input text-xl font-extrabold" defaultValue="رحلة قطرة ماء" />
+            <input className="input text-xl font-extrabold" defaultValue={data.project.title} />
           </label>
           <label className="mt-5 block">
             <span className="mb-2 block text-sm font-bold text-muted-foreground">محتوى القصة</span>

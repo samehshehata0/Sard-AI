@@ -5,24 +5,26 @@ import { AppShell } from "@/components/layout/app-shell";
 import { StoryCard } from "@/components/shared/story-card";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
-import { dashboardStats } from "@/lib/constants/dashboard-data";
-import { stories } from "@/lib/constants/stories-data";
+import { authService } from "@/services/auth-service";
+import { mockDashboardStats } from "@/services/mock-data";
+import { projectsService } from "@/services/projects-service";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const [user, stories] = await Promise.all([authService.me(), projectsService.getCards()]);
   return (
     <AppShell title="لوحة التحكم">
       <div className="space-y-6">
         <Card className="bg-gradient-to-l from-primary to-secondary text-primary-foreground">
           <div className="flex flex-col justify-between gap-5 md:flex-row md:items-center">
             <div>
-              <h2 className="font-heading text-3xl font-black">مرحبًا، Sameh 👋</h2>
+              <h2 className="font-heading text-3xl font-black">مرحبًا، {user.fullName} 👋</h2>
               <p className="mt-3 text-lg text-primary-foreground/85">لنبدأ إنشاء قصة تعليمية جديدة اليوم</p>
             </div>
             <ArabicButton href="/stories/new" variant="secondary" icon={<ArrowLeft className="h-4 w-4 rtl-icon" />}>إنشاء قصة جديدة</ArabicButton>
           </div>
         </Card>
         <div className="grid gap-5 md:grid-cols-2 xl:grid-cols-4">
-          {dashboardStats.map((stat) => <StatCard key={stat.label} {...stat} />)}
+          {mockDashboardStats.map((stat) => <StatCard key={stat.label} {...stat} />)}
         </div>
         <div className="grid gap-6 xl:grid-cols-[1fr_380px]">
           <div>

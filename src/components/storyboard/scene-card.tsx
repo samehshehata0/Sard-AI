@@ -1,6 +1,7 @@
 import { Edit3, Mic2, Video } from "lucide-react";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
+import type { StoryScene } from "@/types/project";
 
 const statusClass: Record<string, string> = {
   "تم الإنشاء": "bg-success/10 text-success",
@@ -8,7 +9,7 @@ const statusClass: Record<string, string> = {
   "قيد الانتظار": "bg-muted text-muted-foreground",
 };
 
-export function SceneCard({ scene }: { scene: { number: number; title: string; visual: string; narration: string; prompt: string; status: string } }) {
+export function SceneCard({ scene }: { scene: StoryScene }) {
   return (
     <Card>
       <div className="flex flex-wrap items-start justify-between gap-3">

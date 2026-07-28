@@ -3,17 +3,29 @@
 import { zodResolver } from "@hookform/resolvers/zod";
 import Link from "next/link";
 import { useForm } from "react-hook-form";
+import { useState } from "react";
 import { z } from "zod";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
 import { loginSchema, registerSchema } from "@/lib/validations";
+import { authService } from "@/services/auth-service";
+import type { UserRole } from "@/types/user";
 
 export function LoginForm() {
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "", remember: true } });
+  async function submit(values: z.infer<typeof loginSchema>) {
+    setSubmitError(null);
+    try {
+      await authService.login(values);
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "تعذر تسجيل الدخول.");
+    }
+  }
   return (
     <AuthFrame title="تسجيل الدخول" subtitle="مرحبًا بعودتك إلى مساحة القصص التعليمية">
-      <form onSubmit={form.handleSubmit(() => {})} className="space-y-4">
+      <form onSubmit={form.handleSubmit(submit)} className="space-y-4">
         <Field label="البريد الإلكتروني" error={form.formState.errors.email?.message}>
           <input {...form.register("email")} className="input" placeholder="أدخل بريدك الجامعي" />
         </Field>
@@ -27,7 +39,10 @@ export function LoginForm() {
           </label>
           <Link href="/login" className="font-bold text-primary">نسيت كلمة المرور؟</Link>
         </div>
-        <ArabicButton className="w-full" type="submit">تسجيل الدخول</ArabicButton>
+        {submitError ? <p className="text-sm font-bold text-destructive" role="alert">{submitError}</p> : null}
+        <ArabicButton className="w-full" type="submit" disabled={form.formState.isSubmitting}>
+          {form.formState.isSubmitting ? "جارٍ تسجيل الدخول..." : "تسجيل الدخول"}
+        </ArabicButton>
         <p className="text-center text-sm text-muted-foreground">
           ليس لديك حساب؟ <Link href="/register" className="font-bold text-primary">إنشاء حساب جديد</Link>
         </p>
@@ -37,10 +52,20 @@ export function LoginForm() {
 }
 
 export function RegisterForm() {
+  const [submitError, setSubmitError] = useState<string | null>(null);
   const form = useForm<z.infer<typeof registerSchema>>({ resolver: zodResolver(registerSchema), defaultValues: { fullName: "", email: "", password: "", confirmPassword: "", role: "طالب معلم" } });
+  async function submit(values: z.infer<typeof registerSchema>) {
+    const roles: Record<string, UserRole> = { "طالب معلم": "student_teacher", "عضو هيئة تدريس": "faculty_member", "مشرف": "supervisor" };
+    setSubmitError(null);
+    try {
+      await authService.register({ fullName: values.fullName, email: values.email, password: values.password, role: roles[values.role] });
+    } catch (error) {
+      setSubmitError(error instanceof Error ? error.message : "تعذر إنشاء الحساب.");
+    }
+  }
   return (
     <AuthFrame title="إنشاء حساب" subtitle="ابدأ بناء قصص عربية تعليمية مدعومة بالذكاء الاصطناعي">
-      <form onSubmit={form.handleSubmit(() => {})} className="space-y-4">
+      <form onSubmit={form.handleSubmit(submit)} className="space-y-4">
         <Field label="الاسم الكامل" error={form.formState.errors.fullName?.message}>
           <input {...form.register("fullName")} className="input" placeholder="اكتب اسمك الكامل" />
         </Field>
@@ -62,7 +87,10 @@ export function RegisterForm() {
             <option>مشرف</option>
           </select>
         </Field>
-        <ArabicButton className="w-full" type="submit">إنشاء الحساب</ArabicButton>
+        {submitError ? <p className="text-sm font-bold text-destructive" role="alert">{submitError}</p> : null}
+        <ArabicButton className="w-full" type="submit" disabled={form.formState.isSubmitting}>
+          {form.formState.isSubmitting ? "جارٍ إنشاء الحساب..." : "إنشاء الحساب"}
+        </ArabicButton>
         <p className="text-center text-sm text-muted-foreground">
           لديك حساب بالفعل؟ <Link href="/login" className="font-bold text-primary">تسجيل الدخول</Link>
         </p>
