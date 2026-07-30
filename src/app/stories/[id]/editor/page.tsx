@@ -1,19 +1,6 @@
-import { AppShell } from "@/components/layout/app-shell";
-import dynamic from "next/dynamic";
-import { FormSkeleton } from "@/components/shared/route-skeleton";
-import { SectionTitle } from "@/components/ui/card";
+import { redirect } from "next/navigation";
 
-const StoryEditor = dynamic(() => import("@/components/stories/story-editor").then((mod) => mod.StoryEditor), {
-  loading: () => <FormSkeleton />,
-});
-
-export default function StoryEditorPage() {
-  return (
-    <AppShell title="محرر القصة">
-      <div className="space-y-6">
-        <SectionTitle title="محرر القصة" subtitle="راجع النص والشخصيات والأهداف التعليمية قبل تحويل القصة إلى لوحات قصصية." />
-        <StoryEditor />
-      </div>
-    </AppShell>
-  );
+export default async function StoryEditorPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  redirect(`/stories/${id}/storyboard`);
 }
