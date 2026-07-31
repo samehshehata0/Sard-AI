@@ -1,15 +1,15 @@
 import Link from "next/link";
 import { CalendarDays, Gauge } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { StoryStatus } from "@/lib/constants/types";
+import type { ProjectCardView } from "@/types/project";
 
-const statusClasses: Record<StoryStatus, string> = {
+const statusClasses: Record<ProjectCardView["status"], string> = {
   مكتملة: "bg-success/10 text-success",
   مسودة: "bg-warning/10 text-warning",
   "قيد المعالجة": "bg-primary/10 text-primary",
 };
 
-export function StoryCard({ story }: { story: { id: string; title: string; topic: string; status: StoryStatus; date: string; quality: number; description: string } }) {
+export function StoryCard({ story }: { story: ProjectCardView }) {
   return (
     <Card className="flex h-full flex-col">
       <div className="flex items-start justify-between gap-3">
