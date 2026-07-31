@@ -11,13 +11,16 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@gradio/client": "^2.3.1",
     "@hookform/resolvers": "^5.4.0",
+    "@huggingface/inference": "^4.13.23",
     "bcryptjs": "^3.0.3",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "ffmpeg-static": "^5.3.0",
     "lucide-react": "^1.23.0",
-    "mongoose": "^9.8.1",
-    "next": "16.2.12",
+    "mongodb": "^7.5.0",
+    "next": "16.2.10",
     "next-themes": "^0.4.6",
     "react": "19.2.4",
     "react-dom": "19.2.4",
