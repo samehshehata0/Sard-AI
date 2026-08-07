@@ -149,7 +149,7 @@ function GenerationStatus({ story, onRetry, isRetrying }: { story: WorkspaceStor
       <div className="mt-5 h-3 overflow-hidden rounded-full bg-muted" aria-label={`التقدم ${story.progress}%`}>
         <div className={isFailed ? "h-full bg-destructive transition-all duration-500" : "h-full bg-gradient-to-l from-primary to-secondary transition-all duration-500"} style={{ width: `${story.progress}%` }} />
       </div>
-      <p className="mt-3 text-xs font-bold text-muted-foreground">عدد المشاهد المخطط له: {story.sceneCount} من أصل 16 كحد أقصى — مدة كل مشهد بين 3 و5 ثوانٍ.</p>
+      <p className="mt-3 text-xs font-bold text-muted-foreground">توليد عرض تقديمي تفاعلي وإنفوجرافيك ديناميكي.</p>
     </Card>
   );
 }
@@ -179,7 +179,7 @@ function Storyboard({ story }: { story: WorkspaceStory }) {
             <span className="rounded-full bg-muted px-3 py-1 text-xs font-bold text-muted-foreground">{scene.durationSeconds} ثوانٍ</span>
           </div>
           <div className="mt-5 grid gap-5 lg:grid-cols-[280px_1fr]">
-            {scene.imageUrl ? <Image src={scene.imageUrl} alt={`صورة المشهد ${scene.number}: ${scene.title}`} width={1024} height={1024} className="aspect-square w-full rounded-2xl border border-border object-cover" /> : <div className="flex aspect-square items-center justify-center rounded-2xl bg-muted text-muted-foreground"><ImageIcon className="h-10 w-10" /></div>}
+            {scene.imageUrl ? <Image unoptimized src={scene.imageUrl} alt={`صورة المشهد ${scene.number}: ${scene.title}`} width={1024} height={1024} className="aspect-square w-full rounded-2xl border border-border object-cover" /> : <div className="flex aspect-square items-center justify-center rounded-2xl bg-muted text-muted-foreground"><ImageIcon className="h-10 w-10" /></div>}
             <div className="space-y-4">
               <Info label="الوصف البصري" value={scene.visualDescription} />
               <Info label="النص الصوتي" value={scene.narration} />

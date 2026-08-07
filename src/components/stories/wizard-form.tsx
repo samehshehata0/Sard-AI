@@ -25,7 +25,6 @@ export function WizardForm() {
       title: "رحلة قطرة ماء",
       topic: "أهمية الحفاظ على الماء",
       stage: "المرحلة الابتدائية",
-      duration: "60 ثانية",
       objectives: ["أن يشرح المتعلم أهمية ترشيد استهلاك الماء."],
       age: "9-11 سنة",
       level: "متوسط",
@@ -41,7 +40,7 @@ export function WizardForm() {
 
   async function next() {
     const stepFields: (keyof WizardValues)[][] = [
-      ["title", "topic", "stage", "duration"],
+      ["title", "topic", "stage"],
       ["objectives"],
       ["age", "level", "needs"],
       ["style", "tone", "output", "speakerGender"],
@@ -95,11 +94,9 @@ export function WizardForm() {
         {step === 0 ? (
           <div className="grid gap-4 md:grid-cols-2">
             <Field label="اسم القصة" error={form.formState.errors.title?.message}>
-              <input {...form.register("title")} className="input" placeholder="مثال: رحلة قطرة ماء" disabled={isSubmitting} />
+              <input {...form.register("title")} className="input" placeholder="مثال: رحلة قطرة ماء في الدورة الطبيعية" disabled={isSubmitting} />
             </Field>
-            <Field label="فكرة القصة" error={form.formState.errors.topic?.message}>
-              <input {...form.register("topic")} className="input" placeholder="اكتب فكرة القصة بالعربية" disabled={isSubmitting} />
-            </Field>
+
             <Field label="المرحلة التعليمية" error={form.formState.errors.stage?.message}>
               <select {...form.register("stage")} className="input" disabled={isSubmitting}>
                 <option>المرحلة الابتدائية</option>
@@ -107,16 +104,35 @@ export function WizardForm() {
                 <option>المرحلة الثانوية</option>
               </select>
             </Field>
-            <Field label="مدة القصة" error={form.formState.errors.duration?.message}>
-              <select {...form.register("duration")} className="input" disabled={isSubmitting}>
-                <option>30 ثانية</option>
-                <option>60 ثانية</option>
-                <option>90 ثانية</option>
-                <option>120 ثانية</option>
-                <option>150 ثانية</option>
-              </select>
-              <span className="mt-2 block text-xs font-bold text-muted-foreground">تُقسَّم القصة إلى 16 مشهداً كحد أقصى؛ مدة كل مشهد بين 3 و5 ثوانٍ.</span>
-            </Field>
+
+            <div className="md:col-span-2 space-y-4">
+              <Field label="فكرة القصة والتفاصيل الكاملة" error={form.formState.errors.topic?.message}>
+                <textarea
+                  {...form.register("topic")}
+                  rows={4}
+                  className="input min-h-[120px] py-3 leading-relaxed"
+                  placeholder="اكتب فكرة القصة، السيناريو، الأحداث، الشخصيات، التحديات، أو أي تفاصيل ورؤية كاملة ترغب في أن يعتمد عليها الذكاء الاصطناعي بكامل الحرية..."
+                  disabled={isSubmitting}
+                />
+              </Field>
+
+              <Field label="توجيهات وتفاصيل خاصة للمحرك (اختياري)" error={form.formState.errors.custom_instructions?.message}>
+                <textarea
+                  {...form.register("custom_instructions")}
+                  rows={2}
+                  className="input min-h-[70px] py-3 leading-relaxed"
+                  placeholder="مثال: ركز على الحوارات الكوميدية، استخدم شخصيات من الأطفال، أضف تساؤلات تفاعلية..."
+                  disabled={isSubmitting}
+                />
+              </Field>
+            </div>
+            <div className="rounded-2xl border border-primary/20 bg-primary/5 p-5 md:col-span-2 flex items-center gap-4">
+              <div className="text-3xl">✨</div>
+              <div>
+                <div className="text-sm font-extrabold text-foreground">عرض تقديمي وإنفوجرافيك بلا حدود</div>
+                <div className="text-xs font-bold text-muted-foreground mt-1">تم إلغاء التحديد الزمني؛ يتم توليد عدد الشرائح ومحتوى الإنفوجرافيك ديناميكياً وبشكل غير محدود حسب أهداف القصة والدرس.</div>
+              </div>
+            </div>
           </div>
         ) : null}
 
@@ -191,7 +207,6 @@ export function WizardForm() {
               <Summary label="العنوان" value={values.title} />
               <Summary label="الفكرة" value={values.topic} />
               <Summary label="المرحلة" value={values.stage} />
-              <Summary label="المدة" value={values.duration} />
               <Summary label="الأسلوب" value={values.style} />
               <Summary label="جنس الراوي" value={values.speakerGender === "female" ? "أنثى" : "ذكر"} />
             </div>

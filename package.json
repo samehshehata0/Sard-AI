@@ -4,6 +4,8 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "backend": "cd backend && python run.py",
+    "auth": "cd backend && python save_auth.py",
     "build": "next build",
     "start": "next start",
     "lint": "eslint"

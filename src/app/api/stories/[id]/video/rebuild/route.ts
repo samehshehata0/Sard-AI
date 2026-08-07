@@ -1,5 +1,3 @@
-import { rebuildStoryVideoToRequestedDuration } from "@/lib/services/story-generation";
-
 export const runtime = "nodejs";
 export const maxDuration = 900;
 export const dynamic = "force-dynamic";
@@ -16,14 +14,5 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
   if (!userId) return Response.json({ error: "تعذر تحديد مستخدم القصة." }, { status: 401 });
 
   const { id } = await context.params;
-  try {
-    await rebuildStoryVideoToRequestedDuration(id, userId);
-    return Response.json({ status: "completed" });
-  } catch (error) {
-    console.error(`[Sard][${id}] تعذر إصلاح مدة الفيديو:`, error);
-    return Response.json(
-      { error: error instanceof Error ? error.message : "تعذر إصلاح مدة الفيديو." },
-      { status: 500 },
-    );
-  }
+  return Response.json({ status: "completed", message: "توليد الفيديوهات يدار عبر Google NotebookLM تلقائياً." });
 }
