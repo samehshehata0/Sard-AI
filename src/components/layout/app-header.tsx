@@ -3,6 +3,7 @@ import { Bell, Menu, Search } from "lucide-react";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { ThemeToggle } from "@/components/theme/theme-toggle";
+import { LogoutButton } from "@/components/auth/logout-button";
 
 export function AppHeader({ title }: { title: string }) {
   return (
@@ -27,6 +28,7 @@ export function AppHeader({ title }: { title: string }) {
           <button className="rounded-2xl border border-border bg-card p-3 text-muted-foreground shadow-sm" aria-label="الإشعارات">
             <Bell className="h-5 w-5" />
           </button>
+          <div className="lg:hidden"><LogoutButton compact /></div>
           <ArabicButton href="/stories/new" className="hidden md:inline-flex">
             إنشاء قصة
           </ArabicButton>

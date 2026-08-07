@@ -5,7 +5,8 @@ import { StoryHistory } from "@/components/stories/story-history";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
 
-export default function DashboardPage() {
+export default async function DashboardPage() {
+  const [user, stories] = await Promise.all([requireUser(), projectsService.getCards()]);
   return (
     <AppShell title="لوحة التحكم">
       <div className="space-y-6">

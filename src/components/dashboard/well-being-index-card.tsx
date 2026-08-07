@@ -1,8 +1,9 @@
 import { HeartPulse } from "lucide-react";
 import { Card } from "@/components/ui/card";
-import { wellBeing } from "@/lib/constants/dashboard-data";
+import { mockWellBeing } from "@/services/mock-data";
 
 export function WellBeingIndexCard() {
+  const wellBeing = mockWellBeing;
   return (
     <Card className="bg-gradient-to-br from-card to-accent/10">
       <div className="flex items-start justify-between gap-4">

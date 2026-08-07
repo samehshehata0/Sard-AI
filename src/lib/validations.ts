@@ -3,14 +3,13 @@ import { z } from "zod";
 export const loginSchema = z.object({
   email: z.string().min(1, "البريد الإلكتروني مطلوب").email("أدخل بريدًا إلكترونيًا صحيحًا"),
   password: z.string().min(8, "كلمة المرور يجب ألا تقل عن 8 أحرف"),
-  remember: z.boolean().optional(),
 });
 
 export const registerSchema = z
   .object({
-    fullName: z.string().min(2, "الاسم الكامل مطلوب"),
+    fullName: z.string().trim().min(2, "الاسم الكامل مطلوب").max(100, "الاسم الكامل طويل جدًا").regex(/^[\p{L}\p{M}][\p{L}\p{M}\s.'’_-]*$/u, "الاسم يحتوي على رموز غير مسموحة"),
     email: z.string().min(1, "البريد الإلكتروني مطلوب").email("أدخل بريدًا إلكترونيًا صحيحًا"),
-    password: z.string().min(8, "كلمة المرور يجب ألا تقل عن 8 أحرف"),
+    password: z.string().min(8, "كلمة المرور يجب ألا تقل عن 8 أحرف").max(128, "كلمة المرور طويلة جدًا").refine((value) => /[\p{L}]/u.test(value) && /\d/.test(value), "يجب أن تحتوي كلمة المرور على حرف ورقم على الأقل"),
     confirmPassword: z.string().min(1, "تأكيد كلمة المرور مطلوب"),
     role: z.string().min(1, "اختر الدور"),
   })
