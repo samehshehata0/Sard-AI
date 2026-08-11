@@ -20,9 +20,10 @@ export const registerSchema = z
 
 export const storyWizardSchema = z.object({
   title: z.string().min(1, "عنوان القصة مطلوب"),
-  topic: z.string().min(1, "الموضوع التعليمي مطلوب"),
+  topic: z.string().min(1, "فكرة القصة والتفاصيل مطلوبة"),
   stage: z.string().min(1, "المرحلة التعليمية مطلوبة"),
-  duration: z.string().min(1, "مدة القصة مطلوبة"),
+  duration: z.string().optional().default("تلقائي حسب المحتوى"),
+  custom_instructions: z.string().optional(),
   objectives: z.array(z.string().min(1, "لا تترك الهدف فارغًا")).min(1, "يجب إضافة هدف تعليمي واحد على الأقل"),
   age: z.string().min(1, "العمر مطلوب"),
   level: z.string().min(1, "المستوى مطلوب"),

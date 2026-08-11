@@ -25,10 +25,15 @@ export async function getStoryForUser(id: string, userId: string) {
 }
 
 export async function listStoriesForUser(userId: string) {
-  return (await storiesCollection()).find(
-    { userId },
-    { projection: { _id: 1, status: 1, progress: 1, currentStep: 1, error: 1, input: 1, sceneCount: 1, createdAt: 1, updatedAt: 1 } },
-  ).sort({ createdAt: -1 }).toArray();
+  try {
+    return await (await storiesCollection()).find(
+      { userId },
+      { projection: { _id: 1, status: 1, progress: 1, currentStep: 1, error: 1, input: 1, sceneCount: 1, createdAt: 1, updatedAt: 1 } },
+    ).sort({ createdAt: -1 }).toArray();
+  } catch (err) {
+    console.warn("[Sard] MongoDB listStoriesForUser notice, returning empty list:", err);
+    return [];
+  }
 }
 
 export async function updateStoryProgress(id: string, progress: number, currentStep: string) {

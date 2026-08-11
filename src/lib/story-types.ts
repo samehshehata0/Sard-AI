@@ -40,6 +40,9 @@ export type GenerationLog = {
 };
 
 export type StoryAssets = {
+  presentationUrl?: string;
+  videoUrl?: string;
+  thumbnailUrl?: string;
   combinedAudioUrl?: string;
   combinedVideoUrl?: string;
   combinedNarratedVideoUrl?: string;
