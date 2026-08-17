@@ -1,15 +1,12 @@
 import { getStoryForUser } from "@/lib/story-repository";
+import { requireStoryUserId } from "@/lib/story-auth";
+import { apiSuccess } from "@/server/responses/api-response";
+import { handleApiError } from "@/server/errors/error-handler";
+import { AppError } from "@/server/errors/app-error";
 
 export const runtime = "nodejs";
 export const maxDuration = 900;
 export const dynamic = "force-dynamic";
-
-const USER_COOKIE = "sard_user_id";
-
-function getUserId(request: Request) {
-  const cookieHeader = request.headers.get("cookie") || "";
-  return cookieHeader.match(new RegExp(`(?:^|;\\s*)${USER_COOKIE}=([^;]+)`))?.[1];
-}
 
 function sanitizeUrl(url?: string): string | undefined {
   if (!url) return undefined;
@@ -24,13 +21,12 @@ function sanitizeUrl(url?: string): string | undefined {
 }
 
 export async function GET(request: Request, context: { params: Promise<{ id: string }> }) {
-  const userId = getUserId(request);
-  if (!userId) return Response.json({ error: "تعذر تحديد مستخدم القصة. أنشئ القصة من هذا المتصفح أولاً." }, { status: 401 });
-
   const { id } = await context.params;
   try {
+    const userId = await requireStoryUserId();
+
     const story = await getStoryForUser(id, userId);
-    if (!story) return Response.json({ error: "القصة غير موجودة أو لا تملك صلاحية الوصول إليها." }, { status: 404 });
+    if (!story) throw AppError.notFound("القصة غير موجودة أو لا تملك صلاحية الوصول إليها.");
 
     // Sanitize any file:// URLs to HTTP static URLs
     if (story.assets) {
@@ -50,9 +46,8 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
       }));
     }
 
-    return Response.json({ story });
+    return apiSuccess({ story });
   } catch (error) {
-    console.error(`[Sard][${id}] تعذر قراءة القصة من MongoDB:`, error);
-    return Response.json({ error: "تعذر قراءة القصة من MongoDB. راجع طرفية الخادم للتفاصيل." }, { status: 500 });
+    return handleApiError(error, { route: "GET /api/stories/[id]", storyId: id });
   }
 }

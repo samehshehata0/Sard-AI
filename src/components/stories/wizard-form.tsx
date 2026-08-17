@@ -62,11 +62,11 @@ export function WizardForm() {
         body: JSON.stringify(data),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || typeof payload.storyId !== "string") {
-        throw new Error(typeof payload.error === "string" ? payload.error : "لم يبدأ طلب التوليد. راجع طرفية الخادم للتفاصيل.");
+      if (!response.ok || typeof payload.data?.storyId !== "string") {
+        throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "لم يبدأ طلب التوليد. راجع طرفية الخادم للتفاصيل.");
       }
-      console.info(`[Sard][UI] بدأ التوليد للقصة ${payload.storyId}.`);
-      router.push(`/stories/${payload.storyId}/storyboard`);
+      console.info(`[Sard][UI] بدأ التوليد للقصة ${payload.data.storyId}.`);
+      router.push(`/stories/${payload.data.storyId}/storyboard`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "حدث خطأ غير معروف عند بدء التوليد.";
       console.error("[Sard][UI] فشل بدء التوليد:", message);

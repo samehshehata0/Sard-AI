@@ -18,7 +18,12 @@ export function handleApiError(error: unknown, context?: Record<string, unknown>
   }
   if (error instanceof AppError) {
     if (error.statusCode >= 500) logger.error(error.message, { ...context, code: error.code });
-    return apiFailure(error.code, error.message, error.details, error.statusCode);
+    const response = apiFailure(error.code, error.message, error.details, error.statusCode);
+    const retryAfterSeconds = (error.details as { retryAfterSeconds?: unknown } | undefined)?.retryAfterSeconds;
+    if (error.code === "RATE_LIMITED" && typeof retryAfterSeconds === "number") {
+      response.headers.set("Retry-After", String(retryAfterSeconds));
+    }
+    return response;
   }
   logger.error("Unhandled API error", {
     ...context,

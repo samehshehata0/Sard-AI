@@ -13,15 +13,18 @@ vi.mock("@/server/auth/session", () => ({
 vi.mock("@/server/auth/rate-limit", () => ({
   enforceLoginRateLimit: vi.fn(),
   resetLoginRateLimit: vi.fn(),
+  enforceRegisterRateLimit: vi.fn(),
 }));
 
 import { registerUser, loginUser } from "@/server/auth/auth.service";
 import { clearSession, requireUser } from "@/server/auth/session";
+import { enforceRegisterRateLimit } from "@/server/auth/rate-limit";
 import { POST as register } from "@/app/api/auth/register/route";
 import { POST as login } from "@/app/api/auth/login/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
 import { GET as me } from "@/app/api/auth/me/route";
 
+const mockedEnforceRegisterRateLimit = vi.mocked(enforceRegisterRateLimit);
 const mockedRegisterUser = vi.mocked(registerUser);
 const mockedLoginUser = vi.mocked(loginUser);
 const mockedRequireUser = vi.mocked(requireUser);
@@ -62,6 +65,23 @@ describe("authentication route handlers", () => {
     expect(response.status).toBe(201);
     expect(body.data.user).toEqual(user);
     expect(mockedRegisterUser).toHaveBeenCalledWith(expect.objectContaining({ email: "sameh@example.com" }));
+    expect(mockedEnforceRegisterRateLimit).toHaveBeenCalledWith(expect.anything(), "sameh@example.com");
+  });
+
+  it("rejects registration once the rate limit is exceeded", async () => {
+    mockedEnforceRegisterRateLimit.mockImplementationOnce(() => {
+      throw AppError.rateLimited(undefined, 900);
+    });
+    const response = await register(jsonRequest("http://localhost/api/auth/register", {
+      fullName: "سامح أحمد",
+      email: "sameh@example.com",
+      password: "secure123",
+      confirmPassword: "secure123",
+      role: "student_teacher",
+    }));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("900");
+    expect(mockedRegisterUser).not.toHaveBeenCalled();
   });
 
   it("returns conflict for a duplicate email", async () => {

@@ -8,13 +8,17 @@ import {
   completeStory,
   failStory,
 } from "@/lib/story-repository";
+import { requireStoryUserId } from "@/lib/story-auth";
+import { assertSameOrigin } from "@/server/security/request-origin";
+import { apiSuccess } from "@/server/responses/api-response";
+import { handleApiError } from "@/server/errors/error-handler";
+import { AppError } from "@/server/errors/app-error";
 import type { StoryScene } from "@/lib/story-types";
 
 export const runtime = "nodejs";
 export const maxDuration = 900;
 export const dynamic = "force-dynamic";
 
-const USER_COOKIE = "sard_user_id";
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8000";
 
 interface PythonScene {
@@ -34,11 +38,6 @@ interface PythonResponseBody {
   video_url?: string;
   thumbnail_url?: string;
   narration_audio_url?: string;
-}
-
-function getUserId(request: Request) {
-  const cookieHeader = request.headers.get("cookie") || "";
-  return cookieHeader.match(new RegExp(`(?:^|;\\s*)${USER_COOKIE}=([^;]+)`))?.[1];
 }
 
 function postJsonToPythonBackend(url: string, payload: unknown): Promise<{ ok: boolean; status: number; body: PythonResponseBody | string }> {
@@ -79,15 +78,15 @@ function postJsonToPythonBackend(url: string, payload: unknown): Promise<{ ok: b
 }
 
 export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
-  const userId = getUserId(request);
-  if (!userId) return Response.json({ error: "تعذر تحديد مستخدم القصة." }, { status: 401 });
-
   const { id } = await context.params;
   try {
+    assertSameOrigin(request);
+    const userId = await requireStoryUserId();
+
     const story = await getStoryForUser(id, userId);
-    if (!story) return Response.json({ error: "القصة غير موجودة أو لا تملك صلاحية الوصول إليها." }, { status: 404 });
-    if (story.status !== "failed") return Response.json({ error: "لا يمكن إعادة المحاولة إلا لقصة توقفت بسبب خطأ." }, { status: 409 });
-    if (!(await resetStoryForRetry(id, userId))) return Response.json({ error: "تعذر تجهيز القصة لإعادة المحاولة." }, { status: 409 });
+    if (!story) throw AppError.notFound("القصة غير موجودة أو لا تملك صلاحية الوصول إليها.");
+    if (story.status !== "failed") throw AppError.conflict("لا يمكن إعادة المحاولة إلا لقصة توقفت بسبب خطأ.");
+    if (!(await resetStoryForRetry(id, userId))) throw AppError.conflict("تعذر تجهيز القصة لإعادة المحاولة.");
 
     const payload = {
       story_id: id,
@@ -174,9 +173,8 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
       }
     });
 
-    return Response.json({ status: "queued" }, { status: 202 });
+    return apiSuccess({ status: "queued" }, "أعيدت محاولة التوليد بنجاح.", { status: 202 });
   } catch (error) {
-    console.error(`[Sard][${id}] تعذرت إعادة محاولة التوليد:`, error);
-    return Response.json({ error: "تعذرت إعادة محاولة التوليد. راجع طرفية الخادم للتفاصيل." }, { status: 500 });
+    return handleApiError(error, { route: "POST /api/stories/[id]/retry", storyId: id });
   }
 }

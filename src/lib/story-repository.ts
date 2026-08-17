@@ -2,22 +2,10 @@ import { getDb } from "@/lib/db";
 import type { GenerationLog, StoryDocument, StoryInput, StoryScene } from "@/lib/story-types";
 
 const storiesCollection = async () => (await getDb()).collection<StoryDocument>("stories");
-type UserRecord = { _id: string; createdAt: Date; updatedAt: Date; storyIds: string[] };
-
-const usersCollection = async () => (await getDb()).collection<UserRecord>("users");
-
-export async function ensureUser(userId: string) {
-  await (await usersCollection()).updateOne(
-    { _id: userId },
-    { $setOnInsert: { _id: userId, createdAt: new Date(), storyIds: [] }, $set: { updatedAt: new Date() } },
-    { upsert: true },
-  );
-}
 
 export async function createStory(story: StoryDocument) {
   const stories = await storiesCollection();
   await stories.insertOne(story);
-  await (await usersCollection()).updateOne({ _id: story.userId }, { $addToSet: { storyIds: story._id }, $set: { updatedAt: new Date() } });
 }
 
 export async function getStoryForUser(id: string, userId: string) {

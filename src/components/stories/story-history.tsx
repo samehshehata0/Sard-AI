@@ -40,8 +40,8 @@ export function StoryHistory({ limit }: { limit?: number }) {
       try {
         const response = await fetch("/api/stories", { cache: "no-store" });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !Array.isArray(payload.stories)) throw new Error(typeof payload.error === "string" ? payload.error : "تعذر تحميل سجل القصص.");
-        setStories(payload.stories);
+        if (!response.ok || !Array.isArray(payload.data?.stories)) throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "تعذر تحميل سجل القصص.");
+        setStories(payload.data.stories);
       } catch (loadError) {
         setError(loadError instanceof Error ? loadError.message : "تعذر تحميل سجل القصص.");
       } finally {
