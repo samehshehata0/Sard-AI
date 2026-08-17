@@ -9,7 +9,7 @@ export default function Home() {
   return (
     <main className="min-h-screen overflow-hidden bg-background">
       <header className="mx-auto flex max-w-7xl items-center justify-between px-4 py-5 md:px-8">
-        <BrandLogo />
+        <BrandLogo compact={false} />
         <div className="flex items-center gap-3">
           <ArabicButton href="/login" variant="ghost">تسجيل الدخول</ArabicButton>
           <ArabicButton href="/register" className="hidden sm:inline-flex">إنشاء حساب</ArabicButton>
