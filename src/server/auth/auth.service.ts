@@ -40,7 +40,7 @@ export async function loginUser(input: LoginInput) {
   if (!user || !user.isActive || !passwordMatches) {
     throw AppError.authentication(INVALID_CREDENTIALS_MESSAGE);
   }
-  await createSession(String(user._id));
+  await createSession(String(user._id), input.rememberMe);
   return toAuthUserDto(user);
 }
 

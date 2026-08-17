@@ -115,7 +115,18 @@ describe("authentication route handlers", () => {
     }));
     expect(response.status).toBe(200);
     expect((await response.json()).data.user.email).toBe(user.email);
-    expect(mockedLoginUser).toHaveBeenCalledWith({ email: "sameh@example.com", password: "secure123" });
+    expect(mockedLoginUser).toHaveBeenCalledWith({ email: "sameh@example.com", password: "secure123", rememberMe: false });
+  });
+
+  it("passes rememberMe through when the client requests it", async () => {
+    mockedLoginUser.mockResolvedValue(user);
+    const response = await login(jsonRequest("http://localhost/api/auth/login", {
+      email: "sameh@example.com",
+      password: "secure123",
+      rememberMe: true,
+    }));
+    expect(response.status).toBe(200);
+    expect(mockedLoginUser).toHaveBeenCalledWith({ email: "sameh@example.com", password: "secure123", rememberMe: true });
   });
 
   it("rejects UI-only login fields with useful validation details", async () => {

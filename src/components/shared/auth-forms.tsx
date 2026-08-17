@@ -16,7 +16,7 @@ import { authService } from "@/services/auth-service";
 export function LoginForm() {
   const router = useRouter();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "" } });
+  const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "", rememberMe: false } });
   async function submit(values: z.infer<typeof loginSchema>) {
     setSubmitError(null);
     try {
@@ -39,7 +39,7 @@ export function LoginForm() {
         </Field>
         <div className="flex items-center justify-between gap-4 text-sm">
           <label className="inline-flex items-center gap-2 font-bold text-muted-foreground">
-            <input type="checkbox" defaultChecked className="h-4 w-4 rounded border-border accent-primary" />
+            <input type="checkbox" {...form.register("rememberMe")} className="h-4 w-4 rounded border-border accent-primary" />
             تذكرني
           </label>
           <Link href="/login" className="font-bold text-primary">نسيت كلمة المرور؟</Link>

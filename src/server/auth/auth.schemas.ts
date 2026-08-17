@@ -26,6 +26,7 @@ export const loginRequestSchema = z
   .object({
     email: emailSchema,
     password: z.string().min(1, "كلمة المرور مطلوبة.").max(128),
+    rememberMe: z.boolean().optional().default(false),
   })
   .strict();
 

@@ -3,6 +3,7 @@ import { z } from "zod";
 export const loginSchema = z.object({
   email: z.string().trim().toLowerCase().min(1, "البريد الإلكتروني مطلوب").email("أدخل بريدًا إلكترونيًا صحيحًا"),
   password: z.string().min(8, "كلمة المرور يجب ألا تقل عن 8 أحرف"),
+  rememberMe: z.boolean().optional(),
 });
 
 export const registerSchema = z
