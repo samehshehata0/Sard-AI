@@ -104,6 +104,10 @@ select {
   font: inherit;
 }
 
+button:not(:disabled) {
+  cursor: pointer;
+}
+
 ::selection {
   background: color-mix(in srgb, var(--primary) 22%, transparent);
   color: var(--foreground);
