@@ -86,6 +86,24 @@ describe("authentication route handlers", () => {
       role: "admin",
     }));
     expect(response.status).toBe(400);
+    expect((await response.json()).error.details).toMatchObject({
+      fullName: expect.any(String),
+      email: expect.any(String),
+      password: expect.any(String),
+      role: "الدور غير صالح.",
+    });
+    expect(mockedRegisterUser).not.toHaveBeenCalled();
+  });
+
+  it("returns field details when registration confirmation is missing", async () => {
+    const response = await register(jsonRequest("http://localhost/api/auth/register", {
+      fullName: "سامح أحمد",
+      email: "sameh@example.com",
+      password: "secure123",
+      role: "student_teacher",
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.details).toEqual({ confirmPassword: expect.any(String) });
     expect(mockedRegisterUser).not.toHaveBeenCalled();
   });
 
@@ -97,6 +115,18 @@ describe("authentication route handlers", () => {
     }));
     expect(response.status).toBe(200);
     expect((await response.json()).data.user.email).toBe(user.email);
+    expect(mockedLoginUser).toHaveBeenCalledWith({ email: "sameh@example.com", password: "secure123" });
+  });
+
+  it("rejects UI-only login fields with useful validation details", async () => {
+    const response = await login(jsonRequest("http://localhost/api/auth/login", {
+      email: "sameh@example.com",
+      password: "secure123",
+      remember: true,
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.details).toEqual({ request: expect.any(String) });
+    expect(mockedLoginUser).not.toHaveBeenCalled();
   });
 
   it("uses a generic error for invalid credentials", async () => {

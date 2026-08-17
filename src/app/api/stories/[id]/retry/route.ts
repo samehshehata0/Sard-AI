@@ -17,12 +17,31 @@ export const dynamic = "force-dynamic";
 const USER_COOKIE = "sard_user_id";
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8000";
 
+interface PythonScene {
+  scene_number?: number;
+  title?: string;
+  duration_seconds?: number;
+  narration_text?: string;
+  visual_description?: string;
+  image_url?: string;
+}
+
+interface PythonResponseBody {
+  detail?: string;
+  scenes?: PythonScene[];
+  duration_seconds?: number;
+  presentation_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  narration_audio_url?: string;
+}
+
 function getUserId(request: Request) {
   const cookieHeader = request.headers.get("cookie") || "";
   return cookieHeader.match(new RegExp(`(?:^|;\\s*)${USER_COOKIE}=([^;]+)`))?.[1];
 }
 
-function postJsonToPythonBackend(url: string, payload: any): Promise<{ ok: boolean; status: number; body: any }> {
+function postJsonToPythonBackend(url: string, payload: unknown): Promise<{ ok: boolean; status: number; body: PythonResponseBody | string }> {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url);
     const postData = JSON.stringify(payload);
@@ -43,7 +62,7 @@ function postJsonToPythonBackend(url: string, payload: any): Promise<{ ok: boole
         res.on("data", (chunk) => { data += chunk; });
         res.on("end", () => {
           try {
-            const parsed = JSON.parse(data);
+            const parsed = JSON.parse(data) as PythonResponseBody;
             resolve({ ok: !!(res.statusCode && res.statusCode >= 200 && res.statusCode < 300), status: res.statusCode || 500, body: parsed });
           } catch {
             resolve({ ok: false, status: res.statusCode || 500, body: data });
@@ -98,12 +117,16 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           await failStory(id, String(errText)).catch(() => {});
           return;
         }
+        if (typeof result.body === "string") {
+          await failStory(id, "استجابة خدمة التوليد غير صالحة.").catch(() => {});
+          return;
+        }
 
         await updateStoryProgress(id, 75, "أعيدت المحاولة — جارٍ تجهيز مقطع الفيديو والأصول...").catch(() => {});
 
         const data = result.body;
         const scenes: StoryScene[] = Array.isArray(data.scenes) && data.scenes.length > 0
-          ? data.scenes.map((s: any, idx: number) => ({
+          ? data.scenes.map((s, idx) => ({
               number: s.scene_number || idx + 1,
               title: s.title || `المشهد ${idx + 1}`,
               durationSeconds: s.duration_seconds || 8,
@@ -112,7 +135,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
               imagePrompt: story.input.topic,
               videoPrompt: story.input.topic,
               imageUrl: s.image_url || data.thumbnail_url || undefined,
-              audioUrl: data.video_url || undefined,
+              audioUrl: data.narration_audio_url || undefined,
               videoUrl: data.video_url || undefined,
             }))
           : [
@@ -125,7 +148,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
                 imagePrompt: story.input.topic,
                 videoPrompt: story.input.topic,
                 imageUrl: data.thumbnail_url || undefined,
-                audioUrl: data.video_url || undefined,
+                audioUrl: data.narration_audio_url || undefined,
                 videoUrl: data.video_url || undefined,
               },
             ];
@@ -139,7 +162,7 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
           presentationUrl: data.presentation_url || undefined,
           videoUrl: data.video_url || undefined,
           thumbnailUrl: data.thumbnail_url || undefined,
-          combinedAudioUrl: data.video_url || undefined,
+          combinedAudioUrl: data.narration_audio_url || undefined,
           combinedVideoUrl: data.video_url || undefined,
           combinedNarratedVideoUrl: data.video_url || undefined,
         }).catch(() => {});

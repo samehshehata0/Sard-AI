@@ -1,138 +1,193 @@
+import logging
 import os
 import subprocess
-import logging
-import imageio_ffmpeg
-from typing import List, Tuple
+from typing import Tuple
+
+from PIL import Image
+
+from app.core.config import settings
+from app.services.media_validation import (
+    MediaValidationError,
+    get_ffmpeg_exe,
+    validate_audio_file,
+    validate_final_video,
+)
+from app.services.video_slide import VideoSlide
+
 
 logger = logging.getLogger(__name__)
 
+
+class VideoCompositionError(RuntimeError):
+    user_message = "تعذر إنشاء ملف الفيديو النهائي. يرجى إعادة المحاولة."
+
+
 class VideoComposer:
-    def _get_ffmpeg_exe(self) -> str:
-        try:
-            exe = imageio_ffmpeg.get_ffmpeg_exe()
-            if exe and os.path.exists(exe):
-                return exe
-        except Exception as e:
-            logger.warning(f"[VideoComposer] imageio_ffmpeg path resolution warning: {e}")
-        return "ffmpeg"
+    def calculate_display_duration(self, audio_duration: float) -> float:
+        if audio_duration <= 0:
+            raise VideoCompositionError("Narration duration must be positive")
+        return max(
+            settings.MIN_SLIDE_DURATION,
+            audio_duration + settings.SLIDE_PADDING,
+        )
+
+    def _run(self, command: list[str], label: str) -> None:
+        result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if result.returncode != 0:
+            stderr = result.stderr.decode("utf-8", errors="ignore")[-1200:]
+            raise VideoCompositionError(f"{label} failed: {stderr}")
+
+    def build_audio_timeline_command(
+        self,
+        slides: list[VideoSlide],
+        output_path: str,
+    ) -> list[str]:
+        command = [get_ffmpeg_exe(), "-y", "-hide_banner"]
+        filters: list[str] = []
+        labels: list[str] = []
+        for position, slide in enumerate(slides):
+            command.extend(["-i", slide.audio_path])
+            duration = slide.display_duration
+            label = f"a{position}"
+            filters.append(
+                f"[{position}:a]aresample={settings.AUDIO_SAMPLE_RATE},"
+                f"aformat=sample_fmts=fltp:channel_layouts=mono,"
+                f"apad=whole_dur={duration:.3f},atrim=0:{duration:.3f}[{label}]"
+            )
+            labels.append(f"[{label}]")
+        filters.append(f"{''.join(labels)}concat=n={len(slides)}:v=0:a=1[aout]")
+        command.extend(
+            [
+                "-filter_complex",
+                ";".join(filters),
+                "-map",
+                "[aout]",
+                "-ar",
+                str(settings.AUDIO_SAMPLE_RATE),
+                "-ac",
+                "1",
+                "-c:a",
+                "libmp3lame",
+                "-b:a",
+                "192k",
+                output_path,
+            ]
+        )
+        return command
+
+    def _write_concat_file(self, slides: list[VideoSlide], path: str) -> None:
+        with open(path, "w", encoding="utf-8") as concat_file:
+            for slide in slides:
+                clean_path = os.path.abspath(slide.visual_path).replace("\\", "/").replace("'", "'\\''")
+                concat_file.write(f"file '{clean_path}'\n")
+                concat_file.write(f"duration {slide.display_duration:.3f}\n")
+            final_path = os.path.abspath(slides[-1].visual_path).replace("\\", "/").replace("'", "'\\''")
+            concat_file.write(f"file '{final_path}'\n")
+
+    def build_video_command(
+        self,
+        concat_path: str,
+        narration_path: str,
+        video_path: str,
+        total_duration: float,
+    ) -> list[str]:
+        scale_filter = (
+            f"scale={settings.VIDEO_WIDTH}:{settings.VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,"
+            f"pad={settings.VIDEO_WIDTH}:{settings.VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2:color=black,"
+            f"fps={settings.VIDEO_FPS},format=yuv420p"
+        )
+        return [
+            get_ffmpeg_exe(),
+            "-y",
+            "-hide_banner",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_path,
+            "-i",
+            narration_path,
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+            "-vf",
+            scale_filter,
+            "-c:v",
+            "libx264",
+            "-preset",
+            "fast",
+            "-pix_fmt",
+            "yuv420p",
+            "-c:a",
+            "aac",
+            "-b:a",
+            "192k",
+            "-ar",
+            str(settings.AUDIO_SAMPLE_RATE),
+            "-t",
+            f"{total_duration:.3f}",
+            "-movflags",
+            "+faststart",
+            video_path,
+        ]
+
+    def _generate_thumbnail(self, slide_path: str, thumbnail_path: str) -> None:
+        with Image.open(slide_path) as image:
+            image.convert("RGB").save(thumbnail_path, format="JPEG", quality=90)
 
     async def compose_video(
         self,
-        slide_images: List[str],
-        audio_path: str,
-        narration_script: str,
-        output_dir: str
+        slides: list[VideoSlide],
+        output_dir: str,
+        narration_output_path: str | None = None,
     ) -> Tuple[str, str, float]:
-        """
-        Composes final MP4 video from slide images and audio using FFmpeg.
-        Guarantees every slide in the presentation is displayed completely (8-10 seconds per slide).
-        Returns (video_path, thumbnail_path, duration_seconds).
-        """
+        if not slides:
+            raise VideoCompositionError("No slides were supplied")
+
         os.makedirs(output_dir, exist_ok=True)
+        for slide in slides:
+            if not os.path.isfile(slide.visual_path):
+                raise VideoCompositionError(f"Missing slide visual: {slide.visual_path}")
+            try:
+                audio_info = validate_audio_file(slide.audio_path)
+            except MediaValidationError as exc:
+                raise VideoCompositionError(
+                    f"Narration validation failed for slide {slide.index}: {exc}"
+                ) from exc
+            slide.audio_duration = audio_info.duration
+            slide.display_duration = self.calculate_display_duration(audio_info.duration)
+
+        narration_path = narration_output_path or os.path.join(output_dir, "narration.mp3")
         video_path = os.path.join(output_dir, "final_story.mp4")
         thumbnail_path = os.path.join(output_dir, "thumbnail.jpg")
-        ffmpeg_exe = self._get_ffmpeg_exe()
+        concat_path = os.path.join(output_dir, "slides.concat.txt")
+        total_duration = sum(slide.display_duration for slide in slides)
 
-        audio_duration = self._get_media_duration(audio_path)
-        
-        # Calculate per-slide display time (minimum 8.0s per slide for complete reading & viewing)
-        per_slide_duration = max(8.0, audio_duration / max(1, len(slide_images)))
-        total_video_duration = per_slide_duration * len(slide_images)
+        logger.info("[Sard] Total narration timeline duration: %.2fs", total_duration)
+        self._run(
+            self.build_audio_timeline_command(slides, narration_path),
+            "audio timeline composition",
+        )
+        combined_audio = validate_audio_file(narration_path)
+        logger.info(
+            "[Sard] Combined narration validation: OK duration=%.2fs max_volume=%.1fdB",
+            combined_audio.duration,
+            combined_audio.max_volume_db,
+        )
 
-        logger.info(f"[VideoComposer] Using FFmpeg binary: {ffmpeg_exe}")
-        logger.info(f"[VideoComposer] Composing {len(slide_images)} slides over total duration {total_video_duration:.2f}s ({per_slide_duration:.2f}s per slide)")
-
-        # 1. Run multi-slide concat composition with full audio padding & duration limit
-        success = self._simple_concat_fallback(slide_images, audio_path, video_path, per_slide_duration, total_video_duration, ffmpeg_exe)
-        
-        if not success or not os.path.exists(video_path) or os.path.getsize(video_path) == 0:
-            logger.warning("[VideoComposer] Multi-slide concat failed. Falling back to single image render.")
-            self._single_image_fallback(slide_images[0], audio_path, video_path, total_video_duration, ffmpeg_exe)
-
-        # 2. Generate Thumbnail image from slide or video
-        self._generate_thumbnail(slide_images[0], video_path, thumbnail_path, ffmpeg_exe)
-
-        return video_path, thumbnail_path, total_video_duration
-
-    def _get_media_duration(self, path: str) -> float:
-        try:
-            if os.path.exists(path):
-                size = os.path.getsize(path)
-                return max(15.0, size / 4000.0)
-        except Exception:
-            pass
-        return 20.0
-
-    def _simple_concat_fallback(self, slide_images: List[str], audio_path: str, video_path: str, duration_per_slide: float, total_duration: float, ffmpeg_exe: str) -> bool:
-        try:
-            concat_txt = os.path.join(os.path.dirname(video_path), "concat.txt")
-            with open(concat_txt, "w", encoding="utf-8") as f:
-                for img in slide_images:
-                    clean_img = os.path.abspath(img).replace("\\", "/")
-                    f.write(f"file '{clean_img}'\n")
-                    f.write(f"duration {duration_per_slide:.2f}\n")
-                last_img = os.path.abspath(slide_images[-1]).replace("\\", "/")
-                f.write(f"file '{last_img}'\n")
-
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-f", "concat", "-safe", "0", "-i", concat_txt,
-                "-i", audio_path,
-                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                "-af", "apad",
-                "-c:v", "libx264", "-pix_fmt", "yuv420p", "-preset", "fast",
-                "-c:a", "aac", "-b:a", "192k",
-                "-t", str(total_duration),
-                video_path
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if res.returncode != 0:
-                logger.warning(f"[VideoComposer] Concat render warning: {res.stderr.decode('utf-8', errors='ignore')[:300]}")
-            return res.returncode == 0 and os.path.exists(video_path) and os.path.getsize(video_path) > 0
-        except Exception as e:
-            logger.warning(f"[VideoComposer] Concat render error: {e}")
-            return False
-
-    def _single_image_fallback(self, image_path: str, audio_path: str, video_path: str, duration: float, ffmpeg_exe: str) -> bool:
-        try:
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-loop", "1", "-t", str(duration), "-i", image_path,
-                "-i", audio_path,
-                "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2",
-                "-af", "apad",
-                "-c:v", "libx264", "-tune", "stillimage", "-c:a", "aac", "-b:a", "192k",
-                "-t", str(duration),
-                video_path
-            ]
-            res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-            if res.returncode != 0:
-                logger.warning(f"[VideoComposer] Single image render error: {res.stderr.decode('utf-8', errors='ignore')[:300]}")
-            return res.returncode == 0 and os.path.exists(video_path) and os.path.getsize(video_path) > 0
-        except Exception as e:
-            logger.warning(f"[VideoComposer] Single image fallback error: {e}")
-            return False
-
-    def _generate_thumbnail(self, slide_image_path: str, video_path: str, thumbnail_path: str, ffmpeg_exe: str):
-        try:
-            if os.path.exists(slide_image_path):
-                import shutil
-                shutil.copy(slide_image_path, thumbnail_path)
-                logger.info(f"[VideoComposer] Thumbnail copied from slide -> {thumbnail_path}")
-                return
-        except Exception:
-            pass
-
-        try:
-            cmd = [
-                ffmpeg_exe, "-y",
-                "-ss", "00:00:01",
-                "-i", video_path,
-                "-vframes", "1",
-                "-q:v", "2",
-                thumbnail_path
-            ]
-            subprocess.run(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-            logger.info(f"[VideoComposer] Generated thumbnail from video -> {thumbnail_path}")
-        except Exception as e:
-            logger.warning(f"[VideoComposer] Thumbnail generation warning: {e}")
+        self._write_concat_file(slides, concat_path)
+        logger.info("[Sard] Rendering final video")
+        self._run(
+            self.build_video_command(concat_path, narration_path, video_path, total_duration),
+            "final MP4 encoding",
+        )
+        final_info = validate_final_video(video_path, expected_duration=total_duration)
+        self._generate_thumbnail(slides[0].visual_path, thumbnail_path)
+        logger.info(
+            "[Sard] Video validation: OK duration=%.2fs audio_max=%.1fdB",
+            final_info.duration,
+            final_info.max_volume_db,
+        )
+        return video_path, thumbnail_path, final_info.duration

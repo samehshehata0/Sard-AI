@@ -6,7 +6,6 @@ export interface RegisterRequest {
   password: string;
   confirmPassword: string;
   role: UserRole;
-  institution?: string;
 }
 
 export interface LoginRequest {
@@ -16,5 +15,4 @@ export interface LoginRequest {
 
 export interface AuthResponse {
   user: User;
-  accessToken?: string;
 }

@@ -4,7 +4,12 @@ import { logger } from "@/server/logging/logger";
 import { apiFailure } from "@/server/responses/api-response";
 
 function zodDetails(error: ZodError) {
-  return error.issues.map((issue) => ({ field: issue.path.join("."), message: issue.message }));
+  const details: Record<string, string> = {};
+  for (const issue of error.issues) {
+    const field = issue.path.join(".") || "request";
+    details[field] ??= issue.message;
+  }
+  return details;
 }
 
 export function handleApiError(error: unknown, context?: Record<string, unknown>): Response {

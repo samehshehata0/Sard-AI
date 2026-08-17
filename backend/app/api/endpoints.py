@@ -1,153 +1,206 @@
+import logging
 import os
 import uuid
-import logging
-from datetime import datetime
-from fastapi import APIRouter, HTTPException, BackgroundTasks
-from app.schemas.story import StoryGenerationRequest, StoryGenerationResponse
-from app.services.prompt_builder import PromptBuilder
-from app.services.notebooklm_service import NotebookLMService
-from app.services.presentation_downloader import PresentationDownloader
-from app.services.presentation_parser import PresentationParser
-from app.services.slide_generator import SlideGenerator
-from app.services.slide_extractor import SlideExtractor
-from app.services.narration_service import NarrationService
-from app.services.video_composer import VideoComposer
-from app.services.imagekit_uploader import ImageKitUploader
-from app.services.story_repository import StoryRepository
+from datetime import datetime, timezone
+from pathlib import Path
+
+from fastapi import APIRouter, HTTPException
+
 from app.core.config import settings
+from app.schemas.story import GeneratedScene, StoryGenerationRequest, StoryGenerationResponse
+from app.services.imagekit_uploader import ImageKitUploader
+from app.services.media_validation import MediaValidationError
+from app.services.narration_builder import NarrationBuilder
+from app.services.narration_service import NarrationGenerationError, NarrationService
+from app.services.notebooklm_service import NotebookLMGenerationError, NotebookLMService
+from app.services.prompt_builder import PromptBuilder
+from app.services.slide_extractor import SlideExtractor
+from app.services.story_repository import StoryRepository
+from app.services.video_composer import VideoComposer, VideoCompositionError
+
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
 prompt_builder = PromptBuilder()
-downloader = PresentationDownloader()
-parser = PresentationParser()
-slide_generator = SlideGenerator()
 slide_extractor = SlideExtractor()
+narration_builder = NarrationBuilder()
 narration_service = NarrationService()
 video_composer = VideoComposer()
 imagekit_uploader = ImageKitUploader()
 story_repository = StoryRepository()
 
+
+def _arabic_failure(exc: Exception) -> str:
+    if isinstance(exc, NotebookLMGenerationError):
+        return exc.user_message
+    if isinstance(exc, NarrationGenerationError):
+        return exc.user_message
+    if isinstance(exc, (VideoCompositionError, MediaValidationError)):
+        return "تعذر إنشاء فيديو صالح بالصوت والصورة. يرجى إعادة المحاولة."
+    if isinstance(exc, TimeoutError):
+        return "انتهت مهلة إنشاء القصة. يرجى إعادة المحاولة."
+    return "تعذر إكمال إنشاء القصة. يرجى إعادة المحاولة."
+
+
+def _texts_for_unique_slides(all_texts: list[str], slide_images: list[str]) -> list[str]:
+    result: list[str] = []
+    for image_path in slide_images:
+        try:
+            page_number = int(Path(image_path).stem.rsplit("_", 1)[1])
+            result.append(all_texts[page_number - 1] if page_number <= len(all_texts) else "")
+        except (IndexError, ValueError):
+            result.append("")
+    return result
+
+
 @router.post("/generate-story", response_model=StoryGenerationResponse)
 async def generate_story(req: StoryGenerationRequest):
-    """
-    Complete story generation pipeline:
-    1. Build story.md Markdown document.
-    2. Render HD 16:9 RTL Arabic Presentation Deck HTML.
-    3. Run Google NotebookLM Automation for research PDF.
-    4. Extract HD 16:9 PNG slide images.
-    5. Synthesize complete Arabic narration audio script.
-    6. Compose full-length MP4 video presentation.
-    7. Serve assets via static server / ImageKit.
-    """
     story_id = req.story_id or str(uuid.uuid4())
-    logger.info(f"[API] Received story generation request: '{req.story_title}' (ID: {story_id})")
-
     work_dir = os.path.join(settings.TEMP_DIR, story_id)
     os.makedirs(work_dir, exist_ok=True)
+    logger.info("[Sard][%s] Generation started: title=%s", story_id, req.story_title)
 
     try:
-        # 1. Build Story Markdown & NotebookLM prompt
-        story_md_content = prompt_builder.build_story_markdown(req)
         story_md_path = os.path.join(work_dir, "story.md")
-        with open(story_md_path, "w", encoding="utf-8") as f:
-            f.write(story_md_content)
-            
-        notebooklm_prompt = prompt_builder.build_notebooklm_prompt(req)
-
-        # 2. Render HD 16:9 Presentation HTML Slides Deck
-        html_presentation_path = os.path.join(work_dir, "presentation.html")
-        slide_generator.generate_html_presentation(req, html_presentation_path)
-
-        # 3. Run Google NotebookLM Automation
-        notebooklm = NotebookLMService()
-        presentation_file_path = html_presentation_path
-        try:
-            nb_res = await notebooklm.run_pipeline(story_md_path, notebooklm_prompt, work_dir)
-            if nb_res and os.path.exists(nb_res):
-                presentation_file_path = nb_res
-        except Exception as e:
-            logger.warning(f"[API] NotebookLM execution notice: {e}")
-
-        # 4. Extract HD 16:9 Slide Images from Presentation Deck
-        slides_dir = os.path.join(work_dir, "slides")
-        slide_images = await slide_extractor.extract_slides(html_presentation_path, slides_dir)
-
-        # 5. Generate Full Narration Script & Audio (20-30 seconds)
-        objectives_text = " ".join(req.learning_objectives)
-        narration_script_text = (
-            f"مرحباً بكم في العرض التقديمي لقصة {req.story_title}. "
-            f"{req.story_idea}. "
-            f"نستعرض في هذا الدرس الأهداف التعليمية التالية: {objectives_text}. "
-            f"المشهد الأول: انطلاقة الاكتشاف والموقف التعليمي الأساسي. "
-            f"المشهد الثاني: تجربة الملاحظة وفهم العلاقات التطبيقية. "
-            f"المشهد الثالث: التطبيق التربوي، والسلوك الإيجابي الملموس للوصول إلى النتيجة النهائية والنجاح."
-        )
-        audio_path = os.path.join(work_dir, "narration.mp3")
-        await narration_service.generate_narration(
-            text=narration_script_text,
-            voice_gender=req.narrator_gender,
-            output_path=audio_path
+        Path(story_md_path).write_text(
+            prompt_builder.build_story_markdown(req),
+            encoding="utf-8",
         )
 
-        # 6. Compose Full Video Presentation & Thumbnail
+        presentation_path = ""
+        slide_images: list[str] = []
+        slide_texts: list[str] = []
+        total_attempts = settings.GENERATION_RETRY_LIMIT + 1
+        for attempt in range(total_attempts):
+            retrying = attempt > 0
+            attempt_dir = os.path.join(work_dir, f"notebooklm_attempt_{attempt + 1}")
+            slides_dir = os.path.join(work_dir, f"slides_attempt_{attempt + 1}")
+            prompt = prompt_builder.build_notebooklm_prompt(req, expansion_retry=retrying)
+            notebooklm = NotebookLMService()
+            presentation_path = await notebooklm.run_pipeline(story_md_path, prompt, attempt_dir)
+            slide_images = await slide_extractor.extract_slides(presentation_path, slides_dir)
+            all_texts = slide_extractor.extract_slide_texts(presentation_path)
+            slide_texts = _texts_for_unique_slides(all_texts, slide_images)
+            logger.info(
+                "[Sard][%s] NotebookLM generated %s unique slides (attempt %s/%s)",
+                story_id,
+                len(slide_images),
+                attempt + 1,
+                total_attempts,
+            )
+            if len(slide_images) >= settings.MIN_SLIDES:
+                break
+            logger.warning(
+                "[Sard][%s] Insufficient NotebookLM slides: got=%s required=%s",
+                story_id,
+                len(slide_images),
+                settings.MIN_SLIDES,
+            )
+
+        if len(slide_images) < settings.MIN_SLIDES:
+            raise NotebookLMGenerationError(
+                f"NotebookLM returned {len(slide_images)} unique slides after controlled retry"
+            )
+
+        slides = narration_builder.build(req, slide_images, slide_texts)
+        audio_dir = os.path.join(work_dir, "narration_segments")
+        os.makedirs(audio_dir, exist_ok=True)
+        for slide in slides:
+            slide.audio_path = os.path.join(audio_dir, f"scene_{slide.index:02d}.mp3")
+            await narration_service.generate_narration(
+                text=slide.narration_text,
+                voice_gender=req.narrator_gender,
+                voice_tone=req.voice_tone,
+                output_path=slide.audio_path,
+            )
+            audio_info = narration_service.validate(slide.audio_path)
+            slide.audio_duration = audio_info.duration
+            logger.info(
+                "[Sard][%s] Narration generated for slide %s: %.2fs",
+                story_id,
+                slide.index,
+                slide.audio_duration,
+            )
+
+        narration_path = os.path.join(work_dir, "narration.mp3")
         video_dir = os.path.join(work_dir, "video")
         video_path, thumbnail_path, duration_seconds = await video_composer.compose_video(
-            slide_images=slide_images,
-            audio_path=audio_path,
-            narration_script=narration_script_text,
-            output_dir=video_dir
+            slides=slides,
+            output_dir=video_dir,
+            narration_output_path=narration_path,
         )
 
-        # 7. Upload Assets to ImageKit / Static Server
         uploaded_urls = await imagekit_uploader.upload_assets(
-            presentation_path=presentation_file_path,
+            presentation_path=presentation_path,
             video_path=video_path,
             thumbnail_path=thumbnail_path,
-            story_id=story_id
+            story_id=story_id,
+            narration_path=narration_path,
         )
-
-        # 8. Persist Record to MongoDB (with graceful fallback)
-        created_at_dt = datetime.utcnow()
+        created_at = datetime.now(timezone.utc).isoformat()
+        narration_url = uploaded_urls.get("narration_audio_url") or (
+            f"http://127.0.0.1:8000/temp/{story_id}/narration.mp3"
+        )
+        scenes = [
+            GeneratedScene(
+                scene_number=slide.index,
+                title=slide.title,
+                visual_description=f"مادة بصرية تعليمية مولدة عبر NotebookLM حول {req.story_title}",
+                narration_text=slide.narration_text,
+                image_url=f"http://127.0.0.1:8000/temp/{story_id}/{os.path.relpath(slide.visual_path, work_dir).replace(os.sep, '/')}",
+                duration_seconds=slide.display_duration,
+            )
+            for slide in slides
+        ]
         record = {
             "story_id": story_id,
             "user_id": "anonymous_user",
-            "original_inputs": req.dict(),
-            "notebooklm_prompt": notebooklm_prompt,
+            "original_inputs": req.model_dump(),
+            "notebooklm_prompt": prompt_builder.build_notebooklm_prompt(req),
             "presentation_url": uploaded_urls.get("presentation_url"),
             "video_url": uploaded_urls.get("video_url"),
             "thumbnail_url": uploaded_urls.get("thumbnail_url"),
-            "narration_audio_url": f"http://127.0.0.1:8000/temp/{story_id}/narration.mp3",
+            "narration_audio_url": narration_url,
             "duration_seconds": duration_seconds,
-            "scenes": [
-                {
-                    "scene_number": i + 1,
-                    "title": f"المشهد {i + 1}",
-                    "visual_description": f"عرض توضيحي للمشهد {i + 1}",
-                    "narration_text": req.story_idea,
-                    "image_url": f"http://127.0.0.1:8000/temp/{story_id}/slides/scene_{i + 1:02d}.png",
-                    "duration_seconds": duration_seconds / max(1, len(slide_images))
-                } for i in range(len(slide_images))
-            ],
-            "created_at": created_at_dt.isoformat()
+            "scenes": [scene.model_dump() for scene in scenes],
+            "created_at": created_at,
+            "status": "completed",
         }
-
-        try:
-            story_repository.save_story_record(record)
-        except Exception as repo_err:
-            logger.warning(f"[API] Story repository save warning: {repo_err}")
-
+        story_repository.save_story_record(record)
+        logger.info(
+            "[Sard][%s] Generation completed: slides=%s duration=%.2fs",
+            story_id,
+            len(slides),
+            duration_seconds,
+        )
         return StoryGenerationResponse(
             story_id=story_id,
             status="completed",
             presentation_url=record["presentation_url"],
             video_url=record["video_url"],
             thumbnail_url=record["thumbnail_url"],
+            narration_audio_url=narration_url,
             duration_seconds=duration_seconds,
-            created_at=record["created_at"]
+            created_at=created_at,
+            scenes=scenes,
         )
-
-    except Exception as e:
-        logger.error(f"[API] Story generation pipeline failed: {e}", exc_info=True)
-        raise HTTPException(status_code=500, detail=f"Story generation failed: {str(e)}")
+    except Exception as exc:
+        logger.error("[Sard][%s] Generation pipeline failed: %s", story_id, exc, exc_info=True)
+        user_message = _arabic_failure(exc)
+        try:
+            story_repository.save_story_record(
+                {
+                    "story_id": story_id,
+                    "status": "failed",
+                    "errors": [user_message],
+                    "created_at": datetime.now(timezone.utc).isoformat(),
+                }
+            )
+        except Exception as repository_exc:
+            logger.warning(
+                "[Sard][%s] Could not persist failed state: %s",
+                story_id,
+                repository_exc,
+            )
+        raise HTTPException(status_code=500, detail=user_message) from exc

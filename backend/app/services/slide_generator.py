@@ -35,6 +35,24 @@ class SlideGenerator:
                 "الخلاصة والحلول العلمية"
             ]
 
+        # This renderer is retained for direct/manual use only; the production
+        # pipeline now requires NotebookLM visuals. Keep it pedagogically useful
+        # and never let its historical objective-count formula collapse to 3–4 pages.
+        expansion_sections = [
+            f"سؤال يثير الفضول حول {title}",
+            f"الفكرة الأساسية: {topic}",
+            *objectives,
+            f"الأسباب والنتائج المرتبطة بـ {title}",
+            f"مثال من الحياة اليومية على {title}",
+            f"تطبيق عملي يحقق الهدف التعليمي",
+            f"سؤال قصير للتحقق من الفهم",
+        ]
+        unique_sections = []
+        for section in expansion_sections:
+            if section not in unique_sections:
+                unique_sections.append(section)
+        objectives = unique_sections[:14]
+
         theme = self._get_theme(title)
         total_slides = len(objectives) + 2
 
@@ -62,7 +80,7 @@ class SlideGenerator:
 
         <div class="notebooklm-footer">
             <div class="notebooklm-logo"></div>
-            <span>NotebookLM Presentation — 1 من {total_slides}</span>
+            <span>{title}</span>
         </div>
     </div>
 """)
@@ -185,7 +203,7 @@ class SlideGenerator:
         {slide_content}
         <div class="notebooklm-footer">
             <div class="notebooklm-logo"></div>
-            <span>NotebookLM Presentation — {slide_num} من {total_slides}</span>
+            <span>{title}</span>
         </div>
     </div>
 """)
@@ -224,7 +242,7 @@ class SlideGenerator:
 
         <div class="notebooklm-footer">
             <div class="notebooklm-logo"></div>
-            <span>NotebookLM Presentation — {total_slides} من {total_slides}</span>
+            <span>{title}</span>
         </div>
     </div>
 """)

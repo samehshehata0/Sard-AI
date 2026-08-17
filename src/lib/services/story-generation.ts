@@ -11,7 +11,16 @@ import type { StoryScene } from "@/lib/story-types";
 
 const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8000";
 
-function postJsonToPythonBackend(url: string, payload: any): Promise<{ ok: boolean; status: number; body: any }> {
+interface PythonResponseBody {
+  detail?: string;
+  duration_seconds?: number;
+  presentation_url?: string;
+  video_url?: string;
+  thumbnail_url?: string;
+  narration_audio_url?: string;
+}
+
+function postJsonToPythonBackend(url: string, payload: unknown): Promise<{ ok: boolean; status: number; body: PythonResponseBody | string }> {
   return new Promise((resolve, reject) => {
     const parsedUrl = new URL(url);
     const postData = JSON.stringify(payload);
@@ -32,7 +41,7 @@ function postJsonToPythonBackend(url: string, payload: any): Promise<{ ok: boole
         res.on("data", (chunk) => { data += chunk; });
         res.on("end", () => {
           try {
-            const parsed = JSON.parse(data);
+            const parsed = JSON.parse(data) as PythonResponseBody;
             resolve({ ok: !!(res.statusCode && res.statusCode >= 200 && res.statusCode < 300), status: res.statusCode || 500, body: parsed });
           } catch {
             resolve({ ok: false, status: res.statusCode || 500, body: data });
@@ -76,6 +85,7 @@ export async function runStoryGeneration(storyId: string, userId: string) {
       const errText = typeof result.body === "object" ? result.body?.detail || JSON.stringify(result.body) : result.body;
       throw new Error(String(errText));
     }
+    if (typeof result.body === "string") throw new Error("استجابة خدمة التوليد غير صالحة.");
 
     await updateStoryProgress(storyId, 75, "تم استخراج العرض التقديمي والشرائح والصوت، جارٍ الإكمال...").catch(() => {});
 
@@ -90,7 +100,7 @@ export async function runStoryGeneration(storyId: string, userId: string) {
         imagePrompt: story.input.topic,
         videoPrompt: story.input.topic,
         imageUrl: data.thumbnail_url || data.presentation_url || undefined,
-        audioUrl: data.video_url || undefined,
+        audioUrl: data.narration_audio_url || undefined,
         videoUrl: data.video_url || undefined,
       },
     ];
@@ -104,7 +114,7 @@ export async function runStoryGeneration(storyId: string, userId: string) {
       presentationUrl: data.presentation_url || undefined,
       videoUrl: data.video_url || undefined,
       thumbnailUrl: data.thumbnail_url || undefined,
-      combinedAudioUrl: data.video_url || undefined,
+      combinedAudioUrl: data.narration_audio_url || undefined,
       combinedVideoUrl: data.video_url || undefined,
       combinedNarratedVideoUrl: data.video_url || undefined,
     }).catch(() => {});

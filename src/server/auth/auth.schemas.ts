@@ -13,8 +13,8 @@ export const registerRequestSchema = z
     fullName: z.string().trim().min(2, "الاسم الكامل مطلوب.").max(100).regex(namePattern, "الاسم يحتوي على رموز غير مسموحة."),
     email: emailSchema,
     password: passwordSchema,
-    confirmPassword: z.string(),
-    role: z.enum(["student_teacher", "faculty_member", "supervisor"], { message: "الدور المحدد غير صالح." }),
+    confirmPassword: z.string().min(1, "تأكيد كلمة المرور مطلوب."),
+    role: z.enum(["student_teacher", "faculty_member", "supervisor"], { message: "الدور غير صالح." }),
   })
   .strict()
   .refine((value) => value.password === value.confirmPassword, {

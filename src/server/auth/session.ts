@@ -5,7 +5,7 @@ import { cookies } from "next/headers";
 import { connectToDatabase } from "@/server/database/connection";
 import { AuthSessionModel } from "@/server/database/models/auth-session.model";
 import { UserModel, type UserRole } from "@/server/database/models/user.model";
-import { getServerEnv } from "@/server/config/env";
+import { getAuthEnv } from "@/server/config/env";
 import { AppError } from "@/server/errors/app-error";
 import { toAuthUserDto, type AuthUserDto } from "@/server/auth/user-dto";
 import { SESSION_COOKIE_NAME } from "@/lib/auth/constants";
@@ -14,14 +14,14 @@ import { assertRole } from "@/server/auth/authorization";
 export const SESSION_DURATION_SECONDS = 30 * 60;
 
 function hashSessionToken(token: string): string {
-  return createHmac("sha256", getServerEnv().AUTH_SECRET).update(token).digest("hex");
+  return createHmac("sha256", getAuthEnv().AUTH_SECRET).update(token).digest("hex");
 }
 
 function cookieOptions(expires?: Date) {
   return {
     httpOnly: true,
     sameSite: "lax" as const,
-    secure: getServerEnv().NODE_ENV === "production",
+    secure: getAuthEnv().NODE_ENV === "production",
     path: "/",
     ...(expires ? { expires } : {}),
   };

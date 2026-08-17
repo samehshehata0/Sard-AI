@@ -10,7 +10,8 @@ import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
 import { storyGenerationSchema } from "@/lib/story-request-schema";
 
-type WizardValues = z.infer<typeof storyGenerationSchema>;
+type WizardInput = z.input<typeof storyGenerationSchema>;
+type WizardValues = z.output<typeof storyGenerationSchema>;
 
 const steps = ["بيانات القصة", "الأهداف التعليمية", "خصائص المتعلمين", "إعدادات التوليد", "مراجعة وتوليد"];
 
@@ -19,7 +20,7 @@ export function WizardForm() {
   const [step, setStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [requestError, setRequestError] = useState<string>();
-  const form = useForm<WizardValues>({
+  const form = useForm<WizardInput, unknown, WizardValues>({
     resolver: zodResolver(storyGenerationSchema),
     defaultValues: {
       title: "رحلة قطرة ماء",
@@ -39,7 +40,7 @@ export function WizardForm() {
   const objectives = values.objectives?.length ? values.objectives : [""];
 
   async function next() {
-    const stepFields: (keyof WizardValues)[][] = [
+    const stepFields: (keyof WizardInput)[][] = [
       ["title", "topic", "stage"],
       ["objectives"],
       ["age", "level", "needs"],

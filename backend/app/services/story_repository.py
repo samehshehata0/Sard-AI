@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional
 from pymongo import MongoClient
 from app.core.config import settings
@@ -35,7 +35,7 @@ class StoryRepository:
         if not story_id:
             return False
 
-        record["updated_at"] = datetime.utcnow().isoformat()
+        record["updated_at"] = datetime.now(timezone.utc).isoformat()
         if "created_at" not in record:
             record["created_at"] = record["updated_at"]
 

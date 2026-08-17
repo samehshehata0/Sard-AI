@@ -15,15 +15,32 @@ const serverEnvSchema = z.object({
   AI_AUDIO_API_KEY: z.string().trim().min(1, "AI_AUDIO_API_KEY is required"),
 });
 
+const authEnvSchema = serverEnvSchema.pick({
+  NODE_ENV: true,
+  MONGODB_URI: true,
+  AUTH_SECRET: true,
+});
+
 export type ServerEnv = z.infer<typeof serverEnvSchema>;
+export type AuthEnv = z.infer<typeof authEnvSchema>;
 
 export function validateServerEnv(input: Record<string, string | undefined>): ServerEnv {
   return serverEnvSchema.parse(input);
 }
 
+export function validateAuthEnv(input: Record<string, string | undefined>): AuthEnv {
+  return authEnvSchema.parse(input);
+}
+
 let cachedEnv: ServerEnv | undefined;
+let cachedAuthEnv: AuthEnv | undefined;
 
 export function getServerEnv(): ServerEnv {
   cachedEnv ??= validateServerEnv(process.env);
   return cachedEnv;
+}
+
+export function getAuthEnv(): AuthEnv {
+  cachedAuthEnv ??= validateAuthEnv(process.env);
+  return cachedAuthEnv;
 }

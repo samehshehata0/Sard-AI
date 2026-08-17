@@ -9,10 +9,9 @@ function getUserId(request: Request) {
   return cookieHeader.match(new RegExp(`(?:^|;\\s*)${USER_COOKIE}=([^;]+)`))?.[1];
 }
 
-export async function POST(request: Request, context: { params: Promise<{ id: string }> }) {
+export async function POST(request: Request) {
   const userId = getUserId(request);
   if (!userId) return Response.json({ error: "تعذر تحديد مستخدم القصة." }, { status: 401 });
 
-  const { id } = await context.params;
   return Response.json({ status: "completed", message: "توليد الفيديوهات يدار عبر Google NotebookLM تلقائياً." });
 }
