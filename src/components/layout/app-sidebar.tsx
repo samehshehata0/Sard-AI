@@ -1,5 +1,7 @@
+import { Suspense } from 'react';
 import { BrandLogo } from '@/components/brand/brand-logo';
 import { SidebarNav } from '@/components/layout/sidebar-nav';
+import { SidebarUserChip } from '@/components/layout/sidebar-user-chip';
 import { cn } from '@/lib/utils';
 import { LogoutButton } from '@/components/auth/logout-button';
 
@@ -11,8 +13,11 @@ export function AppSidebar({ className }: { className?: string }) {
         className,
       )}
     >
-      <BrandLogo />
+      <BrandLogo href="/dashboard" />
       <SidebarNav />
+      <Suspense fallback={null}>
+        <SidebarUserChip />
+      </Suspense>
       <LogoutButton />
       <div className="mt-8 rounded-3xl bg-linear-to-l from-accent to-primary p-5 text-primary-foreground">
         <p className="font-heading text-lg font-extrabold">

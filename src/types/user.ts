@@ -16,4 +16,5 @@ export interface UpdateUserInput {
   fullName?: string;
   institution?: string | null;
   avatarUrl?: string | null;
+  role?: UserRole;
 }

@@ -35,6 +35,7 @@ export const updateProfileRequestSchema = z
     fullName: z.string().trim().min(2).max(100).regex(namePattern, "الاسم يحتوي على رموز غير مسموحة.").optional(),
     institution: z.string().trim().max(150).nullable().optional(),
     avatarUrl: z.string().trim().url("رابط الصورة غير صالح.").max(2_048).nullable().optional(),
+    role: z.enum(["student_teacher", "faculty_member", "supervisor"], { message: "الدور غير صالح." }).optional(),
   })
   .strict()
   .refine((value) => Object.keys(value).length > 0, "يجب إرسال حقل واحد على الأقل.");
