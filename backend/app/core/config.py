@@ -28,6 +28,8 @@ class Settings(BaseSettings):
     
     # NotebookLM Settings
     NOTEBOOKLM_URL: str = os.getenv("NOTEBOOKLM_URL", "https://notebooklm.google.com")
+    NOTEBOOKLM_EMAIL: str = os.getenv("NOTEBOOKLM_EMAIL", "")
+    NOTEBOOKLM_PASSWORD: str = os.getenv("NOTEBOOKLM_PASSWORD", "")
     NOTEBOOKLM_STORAGE_STATE_PATH: str = os.getenv(
         "NOTEBOOKLM_STORAGE_STATE_PATH",
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage_state.json"))
