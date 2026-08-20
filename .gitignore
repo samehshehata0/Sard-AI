@@ -81,3 +81,6 @@ backend/**/__pycache__/
 storage_state.json
 backend/storage_state.json
 .venv/
+.sard_backend.log
+.sard_frontend.log
+.sard_pids
