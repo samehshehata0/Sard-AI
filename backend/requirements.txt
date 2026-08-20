@@ -14,3 +14,5 @@ httpx>=0.27.0
 pytest>=8.0.0
 Pillow>=10.0.0
 gTTS>=2.5.0
+imageio>=2.37.0
+imageio-ffmpeg>=0.6.0
