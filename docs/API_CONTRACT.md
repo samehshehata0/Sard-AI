@@ -42,7 +42,7 @@ Error response:
   "error": {
     "code": "VALIDATION_ERROR",
     "message": "بعض البيانات غير صالحة.",
-    "details": [{ "field": "email", "message": "البريد الإلكتروني غير صالح." }],
+    "details": { "email": "البريد الإلكتروني غير صالح." },
     "requestId": "req_123"
   }
 }

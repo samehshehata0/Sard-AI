@@ -9,14 +9,14 @@ import { z } from "zod";
 import { BrandLogo } from "@/components/brand/brand-logo";
 import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
+import { ApiError } from "@/lib/api/errors";
 import { loginSchema, registerSchema } from "@/lib/validations";
 import { authService } from "@/services/auth-service";
-import type { UserRole } from "@/types/user";
 
 export function LoginForm() {
   const router = useRouter();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "" } });
+  const form = useForm<z.infer<typeof loginSchema>>({ resolver: zodResolver(loginSchema), defaultValues: { email: "", password: "", rememberMe: false } });
   async function submit(values: z.infer<typeof loginSchema>) {
     setSubmitError(null);
     try {
@@ -24,7 +24,8 @@ export function LoginForm() {
       router.replace("/dashboard");
       router.refresh();
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "تعذر تسجيل الدخول.");
+      const hasFieldErrors = applyServerErrors(form.setError, ["email", "password"], error);
+      setSubmitError(hasFieldErrors ? null : error instanceof Error ? error.message : "تعذر تسجيل الدخول.");
     }
   }
   return (
@@ -38,7 +39,7 @@ export function LoginForm() {
         </Field>
         <div className="flex items-center justify-between gap-4 text-sm">
           <label className="inline-flex items-center gap-2 font-bold text-muted-foreground">
-            <input type="checkbox" defaultChecked className="h-4 w-4 rounded border-border accent-primary" />
+            <input type="checkbox" {...form.register("rememberMe")} className="h-4 w-4 rounded border-border accent-primary" />
             تذكرني
           </label>
           <Link href="/login" className="font-bold text-primary">نسيت كلمة المرور؟</Link>
@@ -58,22 +59,16 @@ export function LoginForm() {
 export function RegisterForm() {
   const router = useRouter();
   const [submitError, setSubmitError] = useState<string | null>(null);
-  const form = useForm<z.infer<typeof registerSchema>>({ resolver: zodResolver(registerSchema), defaultValues: { fullName: "", email: "", password: "", confirmPassword: "", role: "طالب معلم" } });
+  const form = useForm<z.infer<typeof registerSchema>>({ resolver: zodResolver(registerSchema), defaultValues: { fullName: "", email: "", password: "", confirmPassword: "", role: "student_teacher" } });
   async function submit(values: z.infer<typeof registerSchema>) {
-    const roles: Record<string, UserRole> = { "طالب معلم": "student_teacher", "عضو هيئة تدريس": "faculty_member", "مشرف": "supervisor" };
     setSubmitError(null);
     try {
-      await authService.register({
-        fullName: values.fullName,
-        email: values.email,
-        password: values.password,
-        confirmPassword: values.confirmPassword,
-        role: roles[values.role],
-      });
+      await authService.register(values);
       router.replace("/dashboard");
       router.refresh();
     } catch (error) {
-      setSubmitError(error instanceof Error ? error.message : "تعذر إنشاء الحساب.");
+      const hasFieldErrors = applyServerErrors(form.setError, ["fullName", "email", "password", "confirmPassword", "role"], error);
+      setSubmitError(hasFieldErrors ? null : error instanceof Error ? error.message : "تعذر إنشاء الحساب.");
     }
   }
   return (
@@ -95,9 +90,9 @@ export function RegisterForm() {
         </div>
         <Field label="الدور" error={form.formState.errors.role?.message}>
           <select {...form.register("role")} className="input">
-            <option>طالب معلم</option>
-            <option>عضو هيئة تدريس</option>
-            <option>مشرف</option>
+            <option value="student_teacher">طالب معلم</option>
+            <option value="faculty_member">عضو هيئة تدريس</option>
+            <option value="supervisor">مشرف</option>
           </select>
         </Field>
         {submitError ? <p className="text-sm font-bold text-destructive" role="alert">{submitError}</p> : null}
@@ -110,6 +105,23 @@ export function RegisterForm() {
       </form>
     </AuthFrame>
   );
+}
+
+function applyServerErrors<FieldName extends string>(
+  setError: (name: FieldName, error: { type: string; message: string }) => void,
+  fields: readonly FieldName[],
+  error: unknown,
+): boolean {
+  if (!(error instanceof ApiError)) return false;
+
+  let applied = false;
+  for (const field of fields) {
+    const message = error.details[field];
+    if (!message) continue;
+    setError(field, { type: "server", message });
+    applied = true;
+  }
+  return applied;
 }
 
 function AuthFrame({ title, subtitle, children }: { title: string; subtitle: string; children: React.ReactNode }) {

@@ -10,7 +10,8 @@ import { ArabicButton } from "@/components/ui/arabic-button";
 import { Card } from "@/components/ui/card";
 import { storyGenerationSchema } from "@/lib/story-request-schema";
 
-type WizardValues = z.infer<typeof storyGenerationSchema>;
+type WizardInput = z.input<typeof storyGenerationSchema>;
+type WizardValues = z.output<typeof storyGenerationSchema>;
 
 const steps = ["بيانات القصة", "الأهداف التعليمية", "خصائص المتعلمين", "إعدادات التوليد", "مراجعة وتوليد"];
 
@@ -19,7 +20,7 @@ export function WizardForm() {
   const [step, setStep] = useState(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [requestError, setRequestError] = useState<string>();
-  const form = useForm<WizardValues>({
+  const form = useForm<WizardInput, unknown, WizardValues>({
     resolver: zodResolver(storyGenerationSchema),
     defaultValues: {
       title: "رحلة قطرة ماء",
@@ -39,7 +40,7 @@ export function WizardForm() {
   const objectives = values.objectives?.length ? values.objectives : [""];
 
   async function next() {
-    const stepFields: (keyof WizardValues)[][] = [
+    const stepFields: (keyof WizardInput)[][] = [
       ["title", "topic", "stage"],
       ["objectives"],
       ["age", "level", "needs"],
@@ -61,11 +62,11 @@ export function WizardForm() {
         body: JSON.stringify(data),
       });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok || typeof payload.storyId !== "string") {
-        throw new Error(typeof payload.error === "string" ? payload.error : "لم يبدأ طلب التوليد. راجع طرفية الخادم للتفاصيل.");
+      if (!response.ok || typeof payload.data?.storyId !== "string") {
+        throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "لم يبدأ طلب التوليد. راجع طرفية الخادم للتفاصيل.");
       }
-      console.info(`[Sard][UI] بدأ التوليد للقصة ${payload.storyId}.`);
-      router.push(`/stories/${payload.storyId}/storyboard`);
+      console.info(`[Sard][UI] بدأ التوليد للقصة ${payload.data.storyId}.`);
+      router.push(`/stories/${payload.data.storyId}/storyboard`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "حدث خطأ غير معروف عند بدء التوليد.";
       console.error("[Sard][UI] فشل بدء التوليد:", message);

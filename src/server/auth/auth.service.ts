@@ -40,7 +40,7 @@ export async function loginUser(input: LoginInput) {
   if (!user || !user.isActive || !passwordMatches) {
     throw AppError.authentication(INVALID_CREDENTIALS_MESSAGE);
   }
-  await createSession(String(user._id));
+  await createSession(String(user._id), input.rememberMe);
   return toAuthUserDto(user);
 }
 
@@ -50,6 +50,7 @@ export async function updateUserProfile(userId: string, input: UpdateProfileInpu
     ...(input.fullName !== undefined ? { fullName: input.fullName } : {}),
     ...(input.institution !== undefined && input.institution !== null ? { institution: input.institution } : {}),
     ...(input.avatarUrl !== undefined && input.avatarUrl !== null ? { avatarUrl: input.avatarUrl } : {}),
+    ...(input.role !== undefined ? { role: input.role } : {}),
   };
   const fieldsToUnset = {
     ...(input.institution === null ? { institution: 1 } : {}),

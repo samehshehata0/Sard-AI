@@ -40,8 +40,8 @@ export class AppError extends Error {
   static providerFailure(message = "تعذر إكمال الطلب لدى مزود الخدمة.") {
     return new AppError("PROVIDER_FAILURE", 502, message);
   }
-  static rateLimited(message = "تم تجاوز عدد الطلبات المسموح. حاول لاحقًا.") {
-    return new AppError("RATE_LIMITED", 429, message);
+  static rateLimited(message = "تم تجاوز عدد الطلبات المسموح. حاول لاحقًا.", retryAfterSeconds?: number) {
+    return new AppError("RATE_LIMITED", 429, message, retryAfterSeconds !== undefined ? { retryAfterSeconds } : undefined);
   }
   static payloadTooLarge(message = "حجم الطلب أكبر من الحد المسموح.") {
     return new AppError("PAYLOAD_TOO_LARGE", 413, message);

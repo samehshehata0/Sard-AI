@@ -60,9 +60,9 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
       try {
         const response = await fetch(`/api/stories/${storyId}`, { cache: "no-store" });
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !payload.story) throw new Error(typeof payload.error === "string" ? payload.error : "تعذر تحميل حالة القصة.");
+        if (!response.ok || !payload.data?.story) throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "تعذر تحميل حالة القصة.");
         if (cancelled) return;
-        const nextStory = payload.story as WorkspaceStory;
+        const nextStory = payload.data.story as WorkspaceStory;
         setStory(nextStory);
         setLoadError(undefined);
         console.info(`[Sard][UI] تحديث حالة القصة: ${nextStory.status} (${nextStory.progress}%).`);
@@ -89,7 +89,7 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
     try {
       const response = await fetch(`/api/stories/${storyId}/retry`, { method: "POST" });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "تعذرت إعادة محاولة التوليد.");
+      if (!response.ok) throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "تعذرت إعادة محاولة التوليد.");
       console.info(`[Sard][UI] أعيدت محاولة توليد القصة ${storyId}.`);
       setRefreshKey((value) => value + 1);
     } catch (error) {
@@ -105,7 +105,7 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
     try {
       const response = await fetch(`/api/stories/${storyId}/video/rebuild`, { method: "POST" });
       const payload = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(typeof payload.error === "string" ? payload.error : "تعذر إصلاح مدة الفيديو.");
+      if (!response.ok) throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "تعذر إصلاح مدة الفيديو.");
       console.info(`[Sard][UI] أُصلحت مدة فيديو القصة ${storyId}.`);
       setRefreshKey((value) => value + 1);
     } catch (error) {

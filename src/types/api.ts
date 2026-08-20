@@ -15,16 +15,13 @@ export interface PaginationParams {
   pageSize?: number;
 }
 
-export interface ApiFieldError {
-  field: string;
-  message: string;
-}
+export type ApiFieldErrors = Record<string, string>;
 
 export interface ApiErrorBody {
   error: {
     code: string;
     message: string;
-    details?: ApiFieldError[];
+    details?: ApiFieldErrors;
     requestId?: string;
   };
 }

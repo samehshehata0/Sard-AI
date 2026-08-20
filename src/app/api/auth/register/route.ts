@@ -1,5 +1,6 @@
 import { registerRequestSchema } from "@/server/auth/auth.schemas";
 import { registerUser } from "@/server/auth/auth.service";
+import { enforceRegisterRateLimit } from "@/server/auth/rate-limit";
 import { handleApiError } from "@/server/errors/error-handler";
 import { apiSuccess } from "@/server/responses/api-response";
 import { parseJsonBody } from "@/server/validation/common.schemas";
@@ -11,6 +12,7 @@ export async function POST(request: Request) {
   try {
     assertSameOrigin(request);
     const input = await parseJsonBody(request, registerRequestSchema, 20_000);
+    enforceRegisterRateLimit(request, input.email);
     const user = await registerUser(input);
     return apiSuccess({ user }, "تم إنشاء الحساب بنجاح.", { status: 201 });
   } catch (error) {

@@ -1,7 +1,7 @@
 import "server-only";
 
 import mongoose, { type Mongoose } from "mongoose";
-import { getServerEnv } from "@/server/config/env";
+import { getAuthEnv } from "@/server/config/env";
 import { AppError } from "@/server/errors/app-error";
 import { logger } from "@/server/logging/logger";
 
@@ -21,7 +21,7 @@ export async function connectToDatabase(): Promise<Mongoose> {
   if (cache.connection && mongoose.connection.readyState === 1) return cache.connection;
 
   if (!cache.promise) {
-    const { MONGODB_URI } = getServerEnv();
+    const { MONGODB_URI } = getAuthEnv();
     cache.promise = mongoose.connect(MONGODB_URI, {
       bufferCommands: false,
       maxPoolSize: 10,

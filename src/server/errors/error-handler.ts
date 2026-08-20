@@ -4,7 +4,12 @@ import { logger } from "@/server/logging/logger";
 import { apiFailure } from "@/server/responses/api-response";
 
 function zodDetails(error: ZodError) {
-  return error.issues.map((issue) => ({ field: issue.path.join("."), message: issue.message }));
+  const details: Record<string, string> = {};
+  for (const issue of error.issues) {
+    const field = issue.path.join(".") || "request";
+    details[field] ??= issue.message;
+  }
+  return details;
 }
 
 export function handleApiError(error: unknown, context?: Record<string, unknown>): Response {
@@ -13,7 +18,12 @@ export function handleApiError(error: unknown, context?: Record<string, unknown>
   }
   if (error instanceof AppError) {
     if (error.statusCode >= 500) logger.error(error.message, { ...context, code: error.code });
-    return apiFailure(error.code, error.message, error.details, error.statusCode);
+    const response = apiFailure(error.code, error.message, error.details, error.statusCode);
+    const retryAfterSeconds = (error.details as { retryAfterSeconds?: unknown } | undefined)?.retryAfterSeconds;
+    if (error.code === "RATE_LIMITED" && typeof retryAfterSeconds === "number") {
+      response.headers.set("Retry-After", String(retryAfterSeconds));
+    }
+    return response;
   }
   logger.error("Unhandled API error", {
     ...context,

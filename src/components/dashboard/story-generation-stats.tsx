@@ -15,8 +15,8 @@ export function StoryGenerationStats() {
     void fetch("/api/stories", { cache: "no-store" })
       .then(async (response) => {
         const payload = await response.json().catch(() => ({}));
-        if (!response.ok || !Array.isArray(payload.stories)) throw new Error(typeof payload.error === "string" ? payload.error : "تعذر تحميل إحصاءات القصص.");
-        setStatuses(payload.stories.map((story: { status: Status }) => story.status));
+        if (!response.ok || !Array.isArray(payload.data?.stories)) throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "تعذر تحميل إحصاءات القصص.");
+        setStatuses(payload.data.stories.map((story: { status: Status }) => story.status));
       })
       .catch((fetchError) => setError(fetchError instanceof Error ? fetchError.message : "تعذر تحميل إحصاءات القصص."));
   }, []);

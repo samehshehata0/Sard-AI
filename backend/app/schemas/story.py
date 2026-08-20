@@ -26,3 +26,17 @@ class StoryGenerationResponse(BaseModel):
     duration_seconds: float
     created_at: str
     errors: Optional[List[str]] = None
+    narration_audio_url: Optional[str] = None
+    scenes: List["GeneratedScene"] = Field(default_factory=list)
+
+
+class GeneratedScene(BaseModel):
+    scene_number: int
+    title: str
+    visual_description: str
+    narration_text: str
+    image_url: str
+    duration_seconds: float
+
+
+StoryGenerationResponse.model_rebuild()

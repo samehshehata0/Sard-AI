@@ -13,15 +13,18 @@ vi.mock("@/server/auth/session", () => ({
 vi.mock("@/server/auth/rate-limit", () => ({
   enforceLoginRateLimit: vi.fn(),
   resetLoginRateLimit: vi.fn(),
+  enforceRegisterRateLimit: vi.fn(),
 }));
 
 import { registerUser, loginUser } from "@/server/auth/auth.service";
 import { clearSession, requireUser } from "@/server/auth/session";
+import { enforceRegisterRateLimit } from "@/server/auth/rate-limit";
 import { POST as register } from "@/app/api/auth/register/route";
 import { POST as login } from "@/app/api/auth/login/route";
 import { POST as logout } from "@/app/api/auth/logout/route";
 import { GET as me } from "@/app/api/auth/me/route";
 
+const mockedEnforceRegisterRateLimit = vi.mocked(enforceRegisterRateLimit);
 const mockedRegisterUser = vi.mocked(registerUser);
 const mockedLoginUser = vi.mocked(loginUser);
 const mockedRequireUser = vi.mocked(requireUser);
@@ -62,6 +65,23 @@ describe("authentication route handlers", () => {
     expect(response.status).toBe(201);
     expect(body.data.user).toEqual(user);
     expect(mockedRegisterUser).toHaveBeenCalledWith(expect.objectContaining({ email: "sameh@example.com" }));
+    expect(mockedEnforceRegisterRateLimit).toHaveBeenCalledWith(expect.anything(), "sameh@example.com");
+  });
+
+  it("rejects registration once the rate limit is exceeded", async () => {
+    mockedEnforceRegisterRateLimit.mockImplementationOnce(() => {
+      throw AppError.rateLimited(undefined, 900);
+    });
+    const response = await register(jsonRequest("http://localhost/api/auth/register", {
+      fullName: "سامح أحمد",
+      email: "sameh@example.com",
+      password: "secure123",
+      confirmPassword: "secure123",
+      role: "student_teacher",
+    }));
+    expect(response.status).toBe(429);
+    expect(response.headers.get("Retry-After")).toBe("900");
+    expect(mockedRegisterUser).not.toHaveBeenCalled();
   });
 
   it("returns conflict for a duplicate email", async () => {
@@ -86,6 +106,24 @@ describe("authentication route handlers", () => {
       role: "admin",
     }));
     expect(response.status).toBe(400);
+    expect((await response.json()).error.details).toMatchObject({
+      fullName: expect.any(String),
+      email: expect.any(String),
+      password: expect.any(String),
+      role: "الدور غير صالح.",
+    });
+    expect(mockedRegisterUser).not.toHaveBeenCalled();
+  });
+
+  it("returns field details when registration confirmation is missing", async () => {
+    const response = await register(jsonRequest("http://localhost/api/auth/register", {
+      fullName: "سامح أحمد",
+      email: "sameh@example.com",
+      password: "secure123",
+      role: "student_teacher",
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.details).toEqual({ confirmPassword: expect.any(String) });
     expect(mockedRegisterUser).not.toHaveBeenCalled();
   });
 
@@ -97,6 +135,29 @@ describe("authentication route handlers", () => {
     }));
     expect(response.status).toBe(200);
     expect((await response.json()).data.user.email).toBe(user.email);
+    expect(mockedLoginUser).toHaveBeenCalledWith({ email: "sameh@example.com", password: "secure123", rememberMe: false });
+  });
+
+  it("passes rememberMe through when the client requests it", async () => {
+    mockedLoginUser.mockResolvedValue(user);
+    const response = await login(jsonRequest("http://localhost/api/auth/login", {
+      email: "sameh@example.com",
+      password: "secure123",
+      rememberMe: true,
+    }));
+    expect(response.status).toBe(200);
+    expect(mockedLoginUser).toHaveBeenCalledWith({ email: "sameh@example.com", password: "secure123", rememberMe: true });
+  });
+
+  it("rejects UI-only login fields with useful validation details", async () => {
+    const response = await login(jsonRequest("http://localhost/api/auth/login", {
+      email: "sameh@example.com",
+      password: "secure123",
+      remember: true,
+    }));
+    expect(response.status).toBe(400);
+    expect((await response.json()).error.details).toEqual({ request: expect.any(String) });
+    expect(mockedLoginUser).not.toHaveBeenCalled();
   });
 
   it("uses a generic error for invalid credentials", async () => {

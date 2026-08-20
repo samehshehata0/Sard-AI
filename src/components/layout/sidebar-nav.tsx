@@ -2,16 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { BookOpen, Clock3, Home, Settings, UserRound } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const navItems = [
-  { href: "/dashboard", label: "لوحة التحكم", icon: Home },
-  { href: "/stories/new", label: "إنشاء قصة", icon: BookOpen },
-  { href: "/history", label: "قصصي ومساحات العمل", icon: Clock3 },
-  { href: "/profile", label: "الملف الشخصي", icon: UserRound },
-  { href: "/settings", label: "الإعدادات", icon: Settings },
-];
+import { navItems } from "@/components/layout/nav-items";
 
 export function SidebarNav() {
   const pathname = usePathname();

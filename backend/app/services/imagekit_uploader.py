@@ -10,9 +10,7 @@ class ImageKitUploader:
     def __init__(self):
         if settings.IMAGEKIT_PUBLIC_KEY and settings.IMAGEKIT_PRIVATE_KEY and settings.IMAGEKIT_URL_ENDPOINT:
             self.imagekit = ImageKit(
-                public_key=settings.IMAGEKIT_PUBLIC_KEY,
                 private_key=settings.IMAGEKIT_PRIVATE_KEY,
-                url_endpoint=settings.IMAGEKIT_URL_ENDPOINT
             )
         else:
             self.imagekit = None
@@ -26,7 +24,8 @@ class ImageKitUploader:
         presentation_path: str,
         video_path: str,
         thumbnail_path: str,
-        story_id: str
+        story_id: str,
+        narration_path: str = "",
     ) -> Dict[str, str]:
         """
         Uploads presentation, video, and thumbnail to ImageKit or serves via HTTP static server.
@@ -36,27 +35,32 @@ class ImageKitUploader:
 
         if not self.imagekit:
             logger.warning("[ImageKitUploader] ImageKit credentials not configured. Serving assets via HTTP static server.")
-            return {
+            urls = {
                 "presentation_url": self._to_http_url(presentation_path),
                 "video_url": self._to_http_url(video_path),
                 "thumbnail_url": self._to_http_url(thumbnail_path)
             }
+            if narration_path:
+                urls["narration_audio_url"] = self._to_http_url(narration_path)
+            return urls
 
         urls = {}
         assets = [
             ("presentation", presentation_path, f"presentation_{story_id}.pdf"),
             ("video", video_path, f"video_{story_id}.mp4"),
-            ("thumbnail", thumbnail_path, f"thumbnail_{story_id}.jpg")
+            ("thumbnail", thumbnail_path, f"thumbnail_{story_id}.jpg"),
+            ("narration_audio", narration_path, f"narration_{story_id}.mp3"),
         ]
 
         for asset_key, local_file, remote_name in assets:
             if os.path.exists(local_file):
                 try:
                     with open(local_file, "rb") as file_data:
-                        res = self.imagekit.upload_file(
-                            file=file_data,
+                        res = self.imagekit.files.upload(
+                            file=file_data.read(),
                             file_name=remote_name,
-                            options={"folder": "/sard_ai_stories/"}
+                            folder="/sard_ai_stories/",
+                            public_key=settings.IMAGEKIT_PUBLIC_KEY,
                         )
                         url = getattr(res, "url", None) or (res.get("url") if isinstance(res, dict) else "")
                         urls[f"{asset_key}_url"] = url
