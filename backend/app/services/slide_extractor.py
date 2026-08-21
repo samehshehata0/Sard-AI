@@ -134,7 +134,7 @@ class SlideExtractor:
         file_url = f"file:///{clean_path}"
 
         with sync_playwright() as p:
-            browser = p.chromium.launch(headless=True)
+            browser = p.chromium.launch(headless=settings.PLAYWRIGHT_HEADLESS)
             page = browser.new_page(viewport={"width": 1920, "height": 1080})
             page.goto(file_url, wait_until="networkidle")
             slides = page.locator(".slide").all()
