@@ -35,12 +35,12 @@ class Settings(BaseSettings):
         os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "storage_state.json"))
     )
     PLAYWRIGHT_HEADLESS: bool = os.getenv("PLAYWRIGHT_HEADLESS", "true").lower() == "true"
-    NOTEBOOKLM_TIMEOUT_SECONDS: int = int(os.getenv("NOTEBOOKLM_TIMEOUT_SECONDS", "1800"))
+    NOTEBOOKLM_TIMEOUT_SECONDS: int = int(os.getenv("NOTEBOOKLM_TIMEOUT_SECONDS", "7200"))
     NOTEBOOKLM_POLL_INTERVAL_SECONDS: float = float(
         os.getenv("NOTEBOOKLM_POLL_INTERVAL_SECONDS", "5")
     )
     NOTEBOOKLM_RESUME_MAX_AGE_SECONDS: int = int(
-        os.getenv("NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", "1800")
+        os.getenv("NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", "7200")
     )
 
     # Existing free Hugging Face / Edge TTS provider.

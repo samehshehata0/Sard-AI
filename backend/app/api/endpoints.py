@@ -22,6 +22,12 @@ from app.services.video_composer import VideoComposer, VideoCompositionError
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
+# Exact strings sent by the frontend wizard's "نوع المخرجات" dropdown
+# (see wizard-form.tsx), forwarded unchanged through route.ts as output_type.
+OUTPUT_TEXT_ONLY = "نص فقط"
+OUTPUT_TEXT_AUDIO = "نص + صوت"
+OUTPUT_TEXT_AUDIO_VIDEO = "نص + صوت + فيديو"
+
 prompt_builder = PromptBuilder()
 slide_extractor = SlideExtractor()
 narration_builder = NarrationBuilder()
@@ -104,32 +110,70 @@ async def generate_story(req: StoryGenerationRequest):
             )
 
         slides = narration_builder.build(req, slide_images, slide_texts)
-        audio_dir = os.path.join(work_dir, "narration_segments")
-        os.makedirs(audio_dir, exist_ok=True)
-        for slide in slides:
-            slide.audio_path = os.path.join(audio_dir, f"scene_{slide.index:02d}.mp3")
-            await narration_service.generate_narration(
-                text=slide.narration_text,
-                voice_gender=req.narrator_gender,
-                voice_tone=req.voice_tone,
-                output_path=slide.audio_path,
-            )
-            audio_info = narration_service.validate(slide.audio_path)
-            slide.audio_duration = audio_info.duration
-            logger.info(
-                "[Sard][%s] Narration generated for slide %s: %.2fs",
-                story_id,
-                slide.index,
-                slide.audio_duration,
-            )
 
-        narration_path = os.path.join(work_dir, "narration.mp3")
-        video_dir = os.path.join(work_dir, "video")
-        video_path, thumbnail_path, duration_seconds = await video_composer.compose_video(
-            slides=slides,
-            output_dir=video_dir,
-            narration_output_path=narration_path,
-        )
+        output_type = (req.output_type or "").strip()
+        video_path: str = ""
+        thumbnail_path: str = ""
+        narration_path: str = ""
+        duration_seconds = 0.0
+
+        if output_type == OUTPUT_TEXT_ONLY:
+            logger.info(
+                "[Sard][%s] Output mode: نص فقط — skipping narration and video generation",
+                story_id,
+            )
+            # No audio/video is produced in this mode, but GeneratedScene.duration_seconds
+            # is a required field, so give every slide a sensible placeholder duration.
+            for slide in slides:
+                slide.display_duration = settings.MIN_SLIDE_DURATION
+            duration_seconds = sum(slide.display_duration for slide in slides)
+
+        else:
+            audio_dir = os.path.join(work_dir, "narration_segments")
+            os.makedirs(audio_dir, exist_ok=True)
+            for slide in slides:
+                slide.audio_path = os.path.join(audio_dir, f"scene_{slide.index:02d}.mp3")
+                await narration_service.generate_narration(
+                    text=slide.narration_text,
+                    voice_gender=req.narrator_gender,
+                    voice_tone=req.voice_tone,
+                    output_path=slide.audio_path,
+                )
+                audio_info = narration_service.validate(slide.audio_path)
+                slide.audio_duration = audio_info.duration
+                logger.info(
+                    "[Sard][%s] Narration generated for slide %s: %.2fs",
+                    story_id,
+                    slide.index,
+                    slide.audio_duration,
+                )
+
+            narration_path = os.path.join(work_dir, "narration.mp3")
+
+            if output_type == OUTPUT_TEXT_AUDIO:
+                logger.info(
+                    "[Sard][%s] Output mode: نص + صوت — skipping video composition",
+                    story_id,
+                )
+                audio_out_dir = os.path.join(work_dir, "audio")
+                narration_path, thumbnail_path, duration_seconds = await video_composer.compose_audio_only(
+                    slides=slides,
+                    output_dir=audio_out_dir,
+                    narration_output_path=narration_path,
+                )
+            else:
+                if output_type != OUTPUT_TEXT_AUDIO_VIDEO:
+                    logger.warning(
+                        "[Sard][%s] Unrecognized output_type '%s'; defaulting to full نص + صوت + فيديو pipeline",
+                        story_id,
+                        req.output_type,
+                    )
+                video_dir = os.path.join(work_dir, "video")
+                video_path, thumbnail_path, duration_seconds = await video_composer.compose_video(
+                    slides=slides,
+                    output_dir=video_dir,
+                    narration_output_path=narration_path,
+                )
 
         uploaded_urls = await imagekit_uploader.upload_assets(
             presentation_path=presentation_path,
@@ -140,7 +184,7 @@ async def generate_story(req: StoryGenerationRequest):
         )
         created_at = datetime.now(timezone.utc).isoformat()
         narration_url = uploaded_urls.get("narration_audio_url") or (
-            f"http://127.0.0.1:8000/temp/{story_id}/narration.mp3"
+            f"http://127.0.0.1:8000/temp/{story_id}/narration.mp3" if narration_path else None
         )
         scenes = [
             GeneratedScene(

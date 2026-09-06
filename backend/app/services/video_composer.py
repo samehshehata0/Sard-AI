@@ -137,6 +137,54 @@ class VideoComposer:
         with Image.open(slide_path) as image:
             image.convert("RGB").save(thumbnail_path, format="JPEG", quality=90)
 
+    async def compose_audio_only(
+        self,
+        slides: list[VideoSlide],
+        output_dir: str,
+        narration_output_path: str | None = None,
+    ) -> Tuple[str, str, float]:
+        """Build only the combined narration track and a static cover
+        thumbnail, without encoding a video. Used for the 'نص + صوت'
+        (text + audio) output mode, which skips ffmpeg's video encoder
+        entirely."""
+        if not slides:
+            raise VideoCompositionError("No slides were supplied")
+
+        os.makedirs(output_dir, exist_ok=True)
+        for slide in slides:
+            if not os.path.isfile(slide.visual_path):
+                raise VideoCompositionError(f"Missing slide visual: {slide.visual_path}")
+            try:
+                audio_info = validate_audio_file(slide.audio_path)
+            except MediaValidationError as exc:
+                raise VideoCompositionError(
+                    f"Narration validation failed for slide {slide.index}: {exc}"
+                ) from exc
+            slide.audio_duration = audio_info.duration
+            slide.display_duration = self.calculate_display_duration(audio_info.duration)
+
+        narration_path = narration_output_path or os.path.join(output_dir, "narration.mp3")
+        thumbnail_path = os.path.join(output_dir, "thumbnail.jpg")
+        total_duration = sum(slide.display_duration for slide in slides)
+
+        logger.info(
+            "[Sard] Total narration timeline duration (audio-only mode): %.2fs",
+            total_duration,
+        )
+        self._run(
+            self.build_audio_timeline_command(slides, narration_path),
+            "audio timeline composition",
+        )
+        combined_audio = validate_audio_file(narration_path)
+        logger.info(
+            "[Sard] Combined narration validation: OK duration=%.2fs max_volume=%.1fdB",
+            combined_audio.duration,
+            combined_audio.max_volume_db,
+        )
+
+        self._generate_thumbnail(slides[0].visual_path, thumbnail_path)
+        return narration_path, thumbnail_path, combined_audio.duration
+
     async def compose_video(
         self,
         slides: list[VideoSlide],

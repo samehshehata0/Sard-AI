@@ -39,6 +39,10 @@ cleanup() {
         done < "$PID_FILE"
         rm -f "$PID_FILE"
     fi
+    if [ -f "$STORAGE_STATE" ]; then
+        echo -e "${YELLOW}Removing NotebookLM storage state...${NC}"
+        rm -f "$STORAGE_STATE"
+    fi
     echo -e "${YELLOW}Shutdown complete.${NC}"
 }
 

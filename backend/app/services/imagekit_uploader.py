@@ -22,35 +22,42 @@ class ImageKitUploader:
     async def upload_assets(
         self,
         presentation_path: str,
-        video_path: str,
-        thumbnail_path: str,
         story_id: str,
+        video_path: str = "",
+        thumbnail_path: str = "",
         narration_path: str = "",
     ) -> Dict[str, str]:
         """
-        Uploads presentation, video, and thumbnail to ImageKit or serves via HTTP static server.
-        Returns dict containing presentation_url, video_url, thumbnail_url.
+        Uploads presentation, and any of video/thumbnail/narration that were
+        actually produced, to ImageKit or serves them via HTTP static server.
+        video_path/thumbnail_path/narration_path may be empty when a lighter
+        output mode (text-only, or text+audio) skipped that stage — in that
+        case the corresponding *_url key is simply omitted from the result
+        instead of pointing at a file that was never created.
+        Returns dict containing presentation_url and whichever of
+        video_url/thumbnail_url/narration_audio_url apply.
         """
         logger.info(f"[ImageKitUploader] Uploading assets for story_id: {story_id}")
 
         if not self.imagekit:
             logger.warning("[ImageKitUploader] ImageKit credentials not configured. Serving assets via HTTP static server.")
-            urls = {
-                "presentation_url": self._to_http_url(presentation_path),
-                "video_url": self._to_http_url(video_path),
-                "thumbnail_url": self._to_http_url(thumbnail_path)
-            }
+            urls = {"presentation_url": self._to_http_url(presentation_path)}
+            if video_path:
+                urls["video_url"] = self._to_http_url(video_path)
+            if thumbnail_path:
+                urls["thumbnail_url"] = self._to_http_url(thumbnail_path)
             if narration_path:
                 urls["narration_audio_url"] = self._to_http_url(narration_path)
             return urls
 
         urls = {}
-        assets = [
-            ("presentation", presentation_path, f"presentation_{story_id}.pdf"),
-            ("video", video_path, f"video_{story_id}.mp4"),
-            ("thumbnail", thumbnail_path, f"thumbnail_{story_id}.jpg"),
-            ("narration_audio", narration_path, f"narration_{story_id}.mp3"),
-        ]
+        assets = [("presentation", presentation_path, f"presentation_{story_id}.pdf")]
+        if video_path:
+            assets.append(("video", video_path, f"video_{story_id}.mp4"))
+        if thumbnail_path:
+            assets.append(("thumbnail", thumbnail_path, f"thumbnail_{story_id}.jpg"))
+        if narration_path:
+            assets.append(("narration_audio", narration_path, f"narration_{story_id}.mp3"))
 
         for asset_key, local_file, remote_name in assets:
             if os.path.exists(local_file):
