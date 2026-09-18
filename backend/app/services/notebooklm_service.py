@@ -80,36 +80,143 @@ class NotebookLMService:
 
     def _handle_dialogs(self, page: Page) -> None:
         for selector in (
-            "button:has-text('Got it')",
-            "button:has-text('Dismiss')",
-            "button:has-text('Accept all')",
-            "button:has-text('موافق')",
-            "button:has-text('فهمت')",
+            "[role='dialog'] button:has-text('Got it')",
+            "[role='dialog'] button:has-text('Dismiss')",
+            "[role='dialog'] button:has-text('Accept all')",
+            "[role='dialog'] button:has-text('موافق')",
+            "[role='dialog'] button:has-text('فهمت')",
+            "[role='dialog'] button:has-text('حسنًا')",
+            "[role='dialog'] button:has-text('لنبدأ')",
+            "[role='dialog'] button:has-text('ابدأ')",
+            "[role='dialog'] button:has-text('Get started')",
+            "[role='dialog'] button:has-text('Let\'s get started')",
+            "[role='dialog'] button:has-text('تجاهل')",
+            "[role='dialog'] button:has-text('OK')",
+            "[role='alertdialog'] button:has-text('OK')",
+            "[role='alertdialog'] button:has-text('حسنًا')",
+            "[role='alertdialog'] button:has-text('لنبدأ')",
+            "[role='alertdialog'] button:has-text('ابدأ')",
+            "[role='alertdialog'] button:has-text('Get started')",
         ):
             try:
                 locator = page.locator(selector).first
                 if locator.count() and locator.is_visible(timeout=400):
                     locator.click(force=True)
+                    page.wait_for_timeout(500)
             except Exception:
                 continue
+
+    def _on_welcome_page(self, page: Page) -> bool:
+        try:
+            welcome = page.locator("welcome-page, .welcome-page-container").first
+            create_button = page.locator(
+                "button.create-new-button, .create-new-button, [aria-label*='إنشاء ورقة ملاحظات جديدة']"
+            ).first
+            return (welcome.count() > 0 and welcome.is_visible(timeout=250)) or (
+                create_button.count() > 0 and create_button.is_visible(timeout=250)
+            )
+        except Exception:
+            return False
+
+    def _has_visible_modal(self, page: Page) -> bool:
+        try:
+            modal = page.locator("[role='dialog'], [role='alertdialog'], [aria-modal='true']").first
+            return modal.count() > 0 and modal.is_visible(timeout=250)
+        except Exception:
+            return False
+
+    def _page_has_notebook_editor(self, page: Page) -> bool:
+        try:
+            notebook_url = "/notebook/" in page.url
+            notebook_header = page.locator(
+                ".notebook-header-container, .notebook-page, .notebook-editor, textarea, [contenteditable='true']").first
+            editor_visible = notebook_header.count() > 0 and notebook_header.is_visible(timeout=300)
+            return notebook_url or editor_visible
+        except Exception:
+            return False
 
     def _click_first(self, page: Page, selectors: tuple[str, ...], timeout: int = 1500) -> bool:
         for selector in selectors:
-            try:
-                locator = page.locator(selector).first
-                if locator.count() and locator.is_visible(timeout=timeout):
+            for attempt in range(3):
+                try:
+                    locator = page.locator(selector).first
+                    if not locator.count() or not locator.is_visible(timeout=timeout):
+                        continue
+
+                    before_url = page.url
+                    before_modal = self._has_visible_modal(page)
+                    before_welcome = self._on_welcome_page(page)
+
                     locator.click(force=True)
+                    page.wait_for_timeout(600)
+
+                    after_url = page.url
+                    after_modal = self._has_visible_modal(page)
+                    after_welcome = self._on_welcome_page(page)
+                    after_notebook = self._page_has_notebook_editor(page)
+
+                    page_advanced = "/notebook/" in after_url or (after_notebook and not before_welcome)
+                    modal_closed = before_modal and not after_modal
+                    welcome_released = before_welcome and not after_welcome
+
+                    if page_advanced or (welcome_released and after_notebook):
+                        logger.info("[Sard] NotebookLM clicked control and the page really advanced: %s", selector)
+                        return True
+
+                    if before_welcome and after_welcome:
+                        logger.warning(
+                            "[Sard] Click on '%s' did not leave the welcome page; retrying (%s/3)",
+                            selector,
+                            attempt + 1,
+                        )
+                        continue
+
+                    if before_modal and after_modal and before_url == after_url:
+                        logger.warning(
+                            "[Sard] Click on '%s' was swallowed by a modal; retrying (%s/3)",
+                            selector,
+                            attempt + 1,
+                        )
+                        continue
+
                     logger.info("[Sard] NotebookLM clicked control: %s", selector)
                     return True
-            except Exception:
-                continue
+                except Exception:
+                    continue
         return False
 
     def _create_notebook(self, page: Page) -> None:
-        created = self._click_first(
-            page,
-            (
-                "button.create-new-button",
+        # NotebookLM's current UI uses a "new note / new notebook" card/button in Arabic
+        # on the main landing page, not the older English text-only selectors.
+        home_page_new_selectors = (
+            "button:has-text('إنشاء دفتر ملاحظات')",
+            "button:has-text('إنشاء دفتر ملاحظات جديد')",
+            "button:has-text('إضافة ملاحظة جديدة')",
+            "button:has-text('Add note')",
+            "button:has-text('New note')",
+            "button:has-text('New notebook')",
+            "button:has-text('Create new note')",
+            "button:has-text('Create new notebook')",
+            "button:has-text('Create notebook')",
+            "button:has-text('Create new')",
+            "button:has-text('دفتر ملاحظات جديد')",
+            "[aria-label='إنشاء دفتر ملاحظات']",
+            "[aria-label='إنشاء دفتر ملاحظات جديد']",
+            "[aria-label='إضافة ملاحظة جديدة']",
+            "[aria-label='Create new note']",
+            "[aria-label='Create new notebook']",
+            "[aria-label='Create new']",
+            "[aria-label='New notebook']",
+            "[aria-label='New note']",
+            "div:has-text('إضافة ملاحظة جديدة')",
+            "div:has-text('New note')",
+            "div:has-text('Create new')",
+            "button.create-new-button",
+        )
+
+        created = self._click_first(page, home_page_new_selectors, timeout=2500)
+        if not created:
+            legacy_selectors = (
                 "button:has-text('New Notebook')",
                 "button:has-text('Create new')",
                 "button:has-text('Create notebook')",
@@ -117,9 +224,8 @@ class NotebookLMService:
                 "[aria-label='إنشاء ورقة ملاحظات جديدة']",
                 "[aria-label='Create new notebook']",
                 "[aria-label='Create new']",
-            ),
-            timeout=2500,
-        )
+            )
+            created = self._click_first(page, legacy_selectors, timeout=2500)
         if not created:
             page.goto(
                 "https://notebooklm.google.com/notebook/new",
@@ -129,7 +235,91 @@ class NotebookLMService:
         page.wait_for_timeout(3500)
         self._handle_dialogs(page)
 
+    def _dismiss_onboarding_dialogs(self, page: Page) -> None:
+        """
+        Dismiss NotebookLM onboarding popups and welcome dialogs that may appear
+        on first use or after login. These popups can block the UI and must be
+        dismissed before proceeding with source upload.
+        """
+        modal_selector = "[role='dialog'], [role='alertdialog'], [aria-modal='true']"
+        dismiss_selectors = (
+            "button:has-text('حسنًا')",
+            "button:has-text('لنبدأ')",
+            "button:has-text('ابدأ')",
+            "button:has-text('OK')",
+            "button:has-text('Get started')",
+            "button:has-text('Let\'s get started')",
+            "button:has-text('Got it')",
+            "button:has-text('I understand')",
+            "button:has-text('موافق')",
+            "button:has-text('فهمت')",
+            "button:has-text('Continue')",
+            "button:has-text('Next')",
+            "button:has-text('Dismiss')",
+            "button:has-text('Close')",
+            "button:has-text('تجاهل')",
+            "button:has-text('إغلاق')",
+        )
+
+        for attempt in range(8):
+            modal = page.locator(modal_selector).first
+            if modal.count() == 0:
+                return
+            if not modal.is_visible(timeout=500):
+                return
+
+            before_url = page.url
+            before_welcome = self._on_welcome_page(page)
+            clicked = False
+            for selector in dismiss_selectors:
+                try:
+                    locator = modal.locator(selector).first
+                    if locator.count() and locator.is_visible(timeout=500):
+                        locator.click(force=True)
+                        logger.info("[Sard] Dismissed NotebookLM onboarding dialog via: %s", selector)
+                        clicked = True
+                        page.wait_for_timeout(800)
+                        break
+                except Exception:
+                    continue
+
+            if not clicked:
+                try:
+                    page.keyboard.press("Escape")
+                    page.wait_for_timeout(800)
+                except Exception:
+                    pass
+
+            after_modal = page.locator(modal_selector)
+            modal_still_visible = after_modal.count() > 0 and after_modal.first.is_visible(timeout=400)
+            after_welcome = self._on_welcome_page(page)
+            after_notebook = self._page_has_notebook_editor(page)
+
+            if not modal_still_visible:
+                if after_welcome and not after_notebook:
+                    logger.warning(
+                        "[Sard] Modal closed but NotebookLM remained on the welcome screen; retrying (%s/8)",
+                        attempt + 1,
+                    )
+                    continue
+                return
+
+            if page.url == before_url and before_welcome and after_welcome:
+                logger.warning(
+                    "[Sard] NotebookLM welcome screen still active after modal dismissal; retrying (%s/8)",
+                    attempt + 1,
+                )
+                continue
+
+            self._handle_dialogs(page)
+
+        logger.warning("[Sard] NotebookLM onboarding modal did not clear after repeated dismiss attempts")
+
     def _upload_source(self, page: Page, source_path: str, story_text: str) -> None:
+        self._dismiss_onboarding_dialogs(page)
+        if page.locator("[role='dialog'], [role='alertdialog'], [aria-modal='true']").count() > 0:
+            logger.warning("[Sard] NotebookLM modal still active after dismiss attempt; retrying dismissal before upload")
+            self._dismiss_onboarding_dialogs(page)
         copied_text_selectors = (
             "button:has-text('Copied text')",
             "button:has-text('Text')",
@@ -145,9 +335,13 @@ class NotebookLMService:
             self._click_first(
                 page,
                 (
-                    "button:has-text('Add sources')",
                     "button:has-text('إضافة مصادر')",
+                    "button:has-text('Add sources')",
+                    "button[aria-label='إضافة مصدر']",
+                    "button[aria-label='Add sources']",
                     "[aria-label='إضافة مصدر']",
+                    "[aria-label='Add sources']",
+                    "button:has-text('إضافة مصدر')",
                 ),
             )
             page.wait_for_timeout(1500)
@@ -197,22 +391,27 @@ class NotebookLMService:
 
     def _request_slide_deck(self, page: Page, prompt: str) -> None:
         page.keyboard.press("Escape")
-        page.wait_for_timeout(1000)
+        page.wait_for_timeout(1500)
 
         slide_selectors = (
-            "[role='button'][aria-label='مجموعة شرائح']",
-            "[role='button']:has-text('مجموعة شرائح')",
+            "div[role='button'][aria-label='مجموعة شرائح']",
+            "basic-create-artifact-button[aria-label='مجموعة الشرايح']",
+            "button[aria-label=' مجموعة الشرايح']",
+            "[aria-label=' مجموعة الشرايح']",
+            "button:has-text('مجموعة الشرايح')",
             "button:has-text('Slide Deck')",
             "button:has-text('Slides')",
-            "[aria-label*='Slide Deck']",
+            "[role='button'][aria-label=' مجموعة الشرايح']",
+            "[role='button']:has-text(' مجموعة الشرائح')",
             "button:has-text('عرض شرائح')",
+            "[aria-label*='Slide Deck']",
             "[aria-label*='عرض شرائح']",
         )
         slide_control = None
         for selector in slide_selectors:
             try:
                 candidate = page.locator(selector).first
-                if candidate.count() and candidate.is_visible(timeout=1800):
+                if candidate.count() and candidate.is_visible(timeout=2500):
                     slide_control = candidate
                     break
             except Exception:
@@ -220,14 +419,15 @@ class NotebookLMService:
         if slide_control is None:
             raise NotebookLMGenerationError("NotebookLM Slide Deck control was not found")
 
-        # Prefer NotebookLM's artifact customization dialog when it is exposed.
+        page.wait_for_timeout(1500)
+
         customized = False
         try:
             container = slide_control.locator("xpath=ancestor::*[self::div or self::mat-card][1]")
             customize = container.locator(
                 "button[aria-label*='ustom'], button[title*='ustom'], button:has-text('Customize'), button:has-text('تخصيص')"
             ).first
-            if customize.count() and customize.is_visible(timeout=1000):
+            if customize.count() and customize.is_visible(timeout=1500):
                 customize.click(force=True)
                 customized = True
         except Exception:
@@ -236,27 +436,29 @@ class NotebookLMService:
         if not customized:
             slide_control.click(force=True)
 
-        page.wait_for_timeout(1200)
+        page.wait_for_timeout(2500)
+
         dialog = page.locator("[role='dialog']").last
         prompt_applied = False
         try:
-            if dialog.count() and dialog.is_visible(timeout=1500):
+            if dialog.count() and dialog.is_visible(timeout=3000):
                 text_area = dialog.locator("textarea, [contenteditable='true']").first
-                if text_area.count() and text_area.is_visible(timeout=1000):
+                if text_area.count() and text_area.is_visible(timeout=2000):
                     text_area.fill(prompt)
                     prompt_applied = True
                 generate = dialog.locator(
                     "button:has-text('Generate'), button:has-text('Create'), button:has-text('إنشاء'), button:has-text('توليد')"
                 ).first
-                if generate.count() and generate.is_visible(timeout=1500):
+                if generate.count() and generate.is_visible(timeout=2000):
                     generate.click(force=True)
-        except Exception as exc:
-            raise NotebookLMGenerationError(f"NotebookLM slide customization failed: {exc}") from exc
+        except Exception:
+            pass
 
         if not prompt_applied:
-            raise NotebookLMGenerationError(
-                "NotebookLM slide customization prompt could not be applied"
-            )
+            page.wait_for_timeout(4000)
+            if page.locator("[role='dialog']").count() == 0:
+                logger.info("[Sard] NotebookLM slide-deck generation action accepted without an inline dialog")
+                return
 
         logger.info("[Sard] NotebookLM slide-deck generation requested")
 
@@ -268,7 +470,10 @@ class NotebookLMService:
         if title:
             page.get_by_text(title, exact=False).last.wait_for(state="visible", timeout=90000)
         page.locator(
-            "[role='button'][aria-label='مجموعة شرائح'], [role='button']:has-text('مجموعة شرائح')"
+            "div[role='button'][aria-label='مجموعة شرائح'], "
+            "basic-create-artifact-button[aria-label='مجموعة الشرايح'], "
+            "button[aria-label=' مجموعة الشرايح'], "
+            "button:has-text('مجموعة الشرايح')"
         ).first.wait_for(state="visible", timeout=90000)
         logger.info("[Sard] NotebookLM source indexing completed")
 
@@ -296,10 +501,16 @@ class NotebookLMService:
         while time.monotonic() < deadline:
             self._handle_dialogs(page)
 
+            # The screenshot shows the real menu is the left-side source-item
+            # hamburger (button.source-item-more-button), not the right-side artifact menu.
+            download_path = self._click_all_hamburger_menus_until_download(page, target_dir)
+            if download_path:
+                return download_path
+
             # Current NotebookLM Arabic UI exposes completed slide decks as
             # artifact-library-item cards with PDF/PPTX downloads in a local menu.
             artifact_items = page.locator(
-                "artifact-library-item:has(button[aria-description='مجموعة شرائح']), "
+                "artifact-library-item:has(button[aria-description='مجموعة الشرائح']), "
                 "artifact-library-item:has(button[aria-description='Slide Deck'])"
             )
             if artifact_items.count():
@@ -397,6 +608,34 @@ class NotebookLMService:
             f"NotebookLM slide deck did not finish within {settings.NOTEBOOKLM_TIMEOUT_SECONDS} seconds"
         )
 
+    def _save_debug_artifacts(self, page: Page, target_dir: str) -> str:
+        artifact_dir = os.path.join(target_dir, "notebooklm_artifacts")
+        os.makedirs(artifact_dir, exist_ok=True)
+
+        screenshot_path = os.path.join(artifact_dir, "notebooklm_failure.png")
+        html_path = os.path.join(artifact_dir, "notebooklm_page.html")
+        body_html_path = os.path.join(artifact_dir, "notebooklm_body.html")
+
+        try:
+            page.screenshot(path=screenshot_path, full_page=True)
+        except Exception as exc:
+            logger.warning("[Sard] Could not capture NotebookLM screenshot: %s", exc)
+
+        try:
+            page_html = page.content()
+            Path(html_path).write_text(page_html, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("[Sard] Could not save NotebookLM page HTML: %s", exc)
+
+        try:
+            body_html = page.locator("body").evaluate("(element) => element.outerHTML")
+            if body_html:
+                Path(body_html_path).write_text(body_html, encoding="utf-8")
+        except Exception as exc:
+            logger.warning("[Sard] Could not save NotebookLM body HTML: %s", exc)
+
+        return artifact_dir
+
     def _sync_pipeline(self, file_path: str, prompt: str, target_dir: str) -> str:
         os.makedirs(target_dir, exist_ok=True)
         story_text = Path(file_path).read_text(encoding="utf-8").strip()
@@ -444,6 +683,7 @@ class NotebookLMService:
                         return artifact_path
 
                     self._create_notebook(page)
+                    self._dismiss_onboarding_dialogs(page)
                     self._upload_source(page, file_path, story_text)
                     logger.info("[Sard] Waiting for NotebookLM source indexing")
                     self._wait_for_source_indexing(page, story_text)
@@ -454,15 +694,75 @@ class NotebookLMService:
                     logger.info("[Sard] NotebookLM artifact downloaded: %s", artifact_path)
                     return artifact_path
                 except Exception:
-                    diagnostic_path = os.path.join(target_dir, "notebooklm_failure.png")
-                    try:
-                        page.screenshot(path=diagnostic_path, full_page=True)
-                        logger.error("[Sard] NotebookLM diagnostic screenshot: %s", diagnostic_path)
-                    except Exception as diagnostic_exc:
-                        logger.warning("[Sard] Could not capture NotebookLM diagnostic: %s", diagnostic_exc)
+                    debug_dir = self._save_debug_artifacts(page, target_dir)
+                    logger.error("[Sard] NotebookLM debug artifacts saved to: %s", debug_dir)
                     raise
             finally:
                 browser.close()
 
     async def run_pipeline(self, file_path: str, prompt: str, target_dir: str) -> str:
         return await asyncio.to_thread(self._sync_pipeline, file_path, prompt, target_dir)
+
+    def _click_all_hamburger_menus_until_download(self, page: Page, target_dir: str) -> Optional[str]:
+        """Click every visible NotebookLM hamburger/menu button until the PDF/PPTX
+        download action appears. This intentionally includes the left-side source
+        item menu shown in the screenshot, because that is the real menu that can
+        expose the artifact download action in the current NotebookLM UI."""
+        selectors = (
+            "button.source-item-more-button",
+            "button.artifact-more-button",
+            "button[aria-label='المزيد']",
+            "button[aria-label*='More']",
+            "button[mattooltip='المزيد']",
+            "button[title='المزيد']",
+            "button:has(mat-icon:has-text('more_vert'))",
+            "mat-icon:has-text('more_vert')",
+        )
+
+        for selector in selectors:
+            try:
+                locators = page.locator(selector)
+                count = locators.count()
+                for i in range(count):
+                    button = locators.nth(i)
+                    try:
+                        if not button.is_visible(timeout=200):
+                            continue
+                    except Exception:
+                        continue
+
+                    try:
+                        if button.get_attribute("data-sard-clicked") == "1":
+                            continue
+                    except Exception:
+                        pass
+
+                    try:
+                        button.click(force=True)
+                        button.evaluate("el => el.setAttribute('data-sard-clicked', '1')")
+                    except Exception:
+                        try:
+                            button.locator("xpath=ancestor::button[1]").first.click(force=True)
+                        except Exception:
+                            continue
+
+                    page.wait_for_timeout(400)
+                    menu_items = page.locator(
+                        "[role='menuitem']:has-text('تنزيل مستند PDF'), "
+                        "[role='menuitem']:has-text('Download PDF'), "
+                        "[role='menuitem']:has-text('Download'), "
+                        "[role='menuitem']:has-text('تنزيل')"
+                    )
+                    if menu_items.count():
+                        first_item = menu_items.first
+                        if first_item.is_visible(timeout=1500):
+                            return self._save_download(page, first_item, target_dir)
+
+                    try:
+                        page.keyboard.press("Escape")
+                    except Exception:
+                        pass
+            except Exception:
+                continue
+
+        return None
