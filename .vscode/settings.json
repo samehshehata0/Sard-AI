@@ -1,6 +1,15 @@
 {
   "python.defaultInterpreterPath": "python",
-  "python.analysis.extraPaths": [
-    "./backend"
-  ]
+  "python.analysis.extraPaths": ["./backend"],
+  "workbench.colorCustomizations": {
+    "statusBar.background": "#4b0082",
+    "statusBar.debuggingBackground": "#4b0082",
+    "statusBar.debuggingForeground": "#e7e7e7",
+    "statusBar.foreground": "#e7e7e7",
+    "statusBarItem.hoverBackground": "#6800b5",
+    "statusBarItem.remoteBackground": "#9f5c00",
+    "statusBarItem.remoteForeground": "#e7e7e7",
+    "statusBar.inactiveBackground": "#4b0082"
+  },
+  "peacock.color": "#4B0082"
 }

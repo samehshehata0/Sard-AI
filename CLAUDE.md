@@ -55,3 +55,17 @@ When adding a feature, check which of these two systems it belongs to before pic
 - `server-only` is imported at the top of sensitive server modules (`env.ts`, `auth.service.ts`, etc.) to keep them out of client bundles. Vitest aliases `server-only` to `tests/server-only.ts` (see `vitest.config.ts`) so these modules are testable under Node.
 - `next.config.ts` externalizes `ffmpeg-static` from the server bundle (it resolves a platform binary at runtime) and allowlists `ik.imagekit.io` for `next/image`.
 - Path alias `@/*` → `src/*` (both `tsconfig.json` and `vitest.config.ts`).
+
+## Agent skills
+
+### Issue tracker
+
+Issues are tracked in GitHub Issues (samehshehata0/Sard-AI), via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default five canonical triage labels used as-is. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context layout (CONTEXT.md + docs/adr/ at repo root). See `docs/agents/domain.md`.
