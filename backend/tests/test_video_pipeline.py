@@ -5,10 +5,10 @@ import subprocess
 import time
 from pathlib import Path
 
+import mongomock
 import pytest
 from PIL import Image, ImageDraw
 
-from app.api import endpoints
 from app.core.config import settings
 from app.schemas.story import StoryGenerationRequest
 from app.services.media_validation import (
@@ -19,11 +19,29 @@ from app.services.media_validation import (
 )
 from app.services.narration_builder import NarrationBuilder
 from app.services.narration_service import NarrationGenerationError, NarrationService
+from app.services import pipeline
+from app.services.job_repository import COMPLETED, DEAD_LETTER, FAILED, JobRepository
+from app.services.job_worker import JobWorker
 from app.services.notebooklm_service import NotebookLMGenerationError, NotebookLMService
 from app.services.prompt_builder import PromptBuilder
 from app.services.slide_extractor import SlideExtractor
 from app.services.video_composer import VideoComposer
 from app.services.video_slide import VideoSlide
+
+
+def run_job(request: StoryGenerationRequest) -> tuple[dict, JobRepository]:
+    """Queue a generation Job for the request and let a worker run it to the end, as the app does."""
+    repository = JobRepository(mongomock.MongoClient()["sard_pipeline_test"]["jobs"])
+    repository.enqueue(request.story_id, request.model_dump(), job_id="job")
+    worker = JobWorker(repository, poll_interval=0)
+
+    async def drain():
+        for _ in range(20):
+            if not await worker.process_one():
+                return
+
+    asyncio.run(drain())
+    return repository.get("job"), repository
 
 
 def patch_notebooklm(monkeypatch, artifact=None, submits=None, fail_with=None):
@@ -225,11 +243,14 @@ def test_multi_slide_composition_and_final_validation(tmp_path, monkeypatch):
 
 def test_generation_failure_never_returns_completed(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "TEMP_DIR", str(tmp_path))
+    monkeypatch.setattr(settings, "JOB_RETRY_BACKOFF_SECONDS", (0,))
     patch_notebooklm(monkeypatch, fail_with=NotebookLMGenerationError("automation unavailable"))
-    with pytest.raises(Exception) as raised:
-        asyncio.run(endpoints.generate_story(request_fixture("failure-story")))
-    assert getattr(raised.value, "detail", "") == NotebookLMGenerationError.user_message
-    assert endpoints.story_repository.get_story_record("failure-story")["status"] == "failed"
+
+    job, _ = run_job(request_fixture("failure-story"))
+
+    assert job["state"] == DEAD_LETTER  # tried again until the attempts ran out, never completed
+    assert job["error"] == NotebookLMGenerationError.user_message
+    assert "result" not in job
 
 
 def test_insufficient_slide_count_retries_once_then_fails(monkeypatch, tmp_path):
@@ -244,13 +265,13 @@ def test_insufficient_slide_count_retries_once_then_fails(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "MIN_SLIDES", 8)
     monkeypatch.setattr(settings, "GENERATION_RETRY_LIMIT", 1)
     patch_notebooklm(monkeypatch, artifact, submits)
-    monkeypatch.setattr(endpoints.slide_extractor, "extract_slides", four_slides)
-    monkeypatch.setattr(endpoints.slide_extractor, "extract_slide_texts", lambda path: [""] * 4)
+    monkeypatch.setattr(pipeline.slide_extractor, "extract_slides", four_slides)
+    monkeypatch.setattr(pipeline.slide_extractor, "extract_slide_texts", lambda path: [""] * 4)
 
-    with pytest.raises(Exception) as raised:
-        asyncio.run(endpoints.generate_story(request_fixture("short-story")))
-    assert len(submits) == 2
-    assert getattr(raised.value, "detail", "") == NotebookLMGenerationError.user_message
+    job, _ = run_job(request_fixture("short-story"))
+    assert len(submits) == 2  # asked again once, with the longer prompt
+    assert job["state"] == FAILED
+    assert job["error"] == NotebookLMGenerationError.user_message
 
 
 def test_successful_eight_slide_generation(monkeypatch, tmp_path):
@@ -285,15 +306,17 @@ def test_successful_eight_slide_generation(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "SLIDE_PADDING", 0.05)
     monkeypatch.setattr(settings, "MIN_VIDEO_BYTES", 1000)
     patch_notebooklm(monkeypatch, artifact)
-    monkeypatch.setattr(endpoints.slide_extractor, "extract_slides", fake_extract)
-    monkeypatch.setattr(endpoints.slide_extractor, "extract_slide_texts", lambda path: ["فكرة تعليمية"] * 8)
-    monkeypatch.setattr(endpoints.narration_service, "generate_narration", fake_narration)
-    monkeypatch.setattr(endpoints.imagekit_uploader, "upload_assets", fake_upload)
-    monkeypatch.setattr(endpoints.story_repository, "save_story_record", lambda record: True)
+    monkeypatch.setattr(pipeline.slide_extractor, "extract_slides", fake_extract)
+    monkeypatch.setattr(pipeline.slide_extractor, "extract_slide_texts", lambda path: ["فكرة تعليمية"] * 8)
+    monkeypatch.setattr(pipeline.narration_service, "generate_narration", fake_narration)
+    monkeypatch.setattr(pipeline.imagekit_uploader, "upload_assets", fake_upload)
+    monkeypatch.setattr(pipeline.story_repository, "save_story_record", lambda record: True)
 
-    result = asyncio.run(endpoints.generate_story(request_fixture("success-story")))
-    assert result.status == "completed"
-    assert len(result.scenes) == 8
-    assert result.duration_seconds > 0
-    assert result.narration_audio_url.endswith("narration.mp3")
-    assert all(scene.duration_seconds > 0 for scene in result.scenes)
+    job, _ = run_job(request_fixture("success-story"))
+    assert job["state"] == COMPLETED
+    result = job["result"]
+    assert result["status"] == "completed"
+    assert len(result["scenes"]) == 8
+    assert result["duration_seconds"] > 0
+    assert result["narration_audio_url"].endswith("narration.mp3")
+    assert all(scene["duration_seconds"] > 0 for scene in result["scenes"])

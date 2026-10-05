@@ -11,7 +11,6 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from app.api.endpoints import router
 from app.api.jobs import get_job_repository, router as jobs_router
 from app.core.config import settings
 from app.services.job_worker import JobWorker
@@ -123,7 +122,6 @@ async def serve_temp_media(path: str, request: Request):
 
     return FileResponse(file_path, media_type=content_type)
 
-app.include_router(router, prefix=settings.API_V1_STR)
 app.include_router(jobs_router, prefix=settings.API_V1_STR)
 
 @app.get("/")
