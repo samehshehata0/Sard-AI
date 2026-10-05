@@ -18,6 +18,11 @@ class Settings(BaseSettings):
     MONGODB_URI: str = os.getenv("MONGODB_URI", "mongodb://localhost:27017")
     MONGODB_DB_NAME: str = os.getenv("MONGODB_DB_NAME", "sard_ai")
     
+    # Job queue (jobs live in MongoDB; there is deliberately no in-memory fallback)
+    JOB_WORKER_ENABLED: bool = os.getenv("JOB_WORKER_ENABLED", "true").lower() == "true"
+    JOB_POLL_INTERVAL_SECONDS: float = float(os.getenv("JOB_POLL_INTERVAL_SECONDS", "2"))
+    JOB_STORE_TIMEOUT_MS: int = int(os.getenv("JOB_STORE_TIMEOUT_MS", "2000"))
+
     # ImageKit Settings
     IMAGEKIT_PUBLIC_KEY: str = os.getenv("IMAGEKIT_PUBLIC_KEY", "")
     IMAGEKIT_PRIVATE_KEY: str = os.getenv("IMAGEKIT_PRIVATE_KEY", "")

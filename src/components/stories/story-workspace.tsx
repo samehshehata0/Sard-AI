@@ -42,7 +42,7 @@ const copy: Record<WorkspaceView, { pageTitle: string; title: string; subtitle: 
 };
 
 function statusLabel(status: WorkspaceStory["status"]) {
-  return ({ queued: "بانتظار بدء التوليد", generating: "جارٍ التوليد", completed: "اكتمل", failed: "توقف بسبب خطأ" })[status];
+  return ({ queued: "في قائمة الانتظار", generating: "جارٍ التوليد", completed: "اكتمل", failed: "توقف بسبب خطأ" })[status];
 }
 
 export function StoryWorkspace({ storyId, view }: { storyId: string; view: WorkspaceView }) {

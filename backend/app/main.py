@@ -6,21 +6,44 @@ import logging
 if sys.platform == "win32":
     asyncio.set_event_loop_policy(asyncio.WindowsProactorEventLoopPolicy())
 
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from app.api.endpoints import router
+from app.api.endpoints import generate_story, router
+from app.api.jobs import get_job_repository, router as jobs_router
 from app.core.config import settings
+from app.services.job_worker import JobWorker
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
 )
 
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    worker_task = None
+    worker = None
+    if settings.JOB_WORKER_ENABLED:
+        # Building the repository never touches MongoDB, so a Mongo outage cannot stop startup.
+        worker = JobWorker(get_job_repository(), generate_story)
+        worker_task = asyncio.create_task(worker.run_forever())
+        logging.info("[Sard] Job worker started")
+    try:
+        yield
+    finally:
+        if worker is not None:
+            worker.stop()
+        if worker_task is not None:
+            worker_task.cancel()
+
+
 app = FastAPI(
     title=settings.PROJECT_NAME,
     openapi_url="/openapi.json",
-    docs_url="/docs"
+    docs_url="/docs",
+    lifespan=lifespan,
 )
 
 app.add_middleware(
@@ -93,6 +116,7 @@ async def serve_temp_media(path: str, request: Request):
     return FileResponse(file_path, media_type=content_type)
 
 app.include_router(router, prefix=settings.API_V1_STR)
+app.include_router(jobs_router, prefix=settings.API_V1_STR)
 
 @app.get("/")
 def root():
