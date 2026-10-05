@@ -1,8 +1,11 @@
 import logging
+from typing import Optional
 
 from playwright.sync_api import Locator, Page
 
 from app.automation.errors import PermanentStepError, TransientStepError
+from app.automation.pacing import HumanPacer
+from app.automation.steps import wait_until
 from app.automation.locators import (
     LocatorNotFoundError,
     LocatorRegistry,
@@ -104,6 +107,7 @@ def click_generate_now(
     registry: LocatorRegistry,
     find_timeout_ms: int = 10_000,
     started_timeout_ms: int = 60_000,
+    pacer: Optional[HumanPacer] = None,
 ) -> str:
     """Click Generate now and confirm generation visibly started.
 
@@ -117,14 +121,13 @@ def click_generate_now(
         raise GenerateNowError(str(exc)) from exc
 
     # The action may stay disabled until the form is ready; wait, don't force.
-    for _ in range(max(1, find_timeout_ms // 250)):
-        if resolved.locator.is_enabled():
-            break
-        page.wait_for_timeout(250)
-    else:
+    if not wait_until(page, resolved.locator.is_enabled, timeout_ms=find_timeout_ms, interval_ms=250):
         raise GenerateNowError("Generate now stayed disabled")
 
-    resolved.locator.click()
+    if pacer is not None:
+        pacer.click(page, resolved.locator, force=False)
+    else:
+        resolved.locator.click()
 
     try:
         page.locator(DIALOG).first.wait_for(state="hidden", timeout=started_timeout_ms)

@@ -16,8 +16,8 @@ from playwright.sync_api import sync_playwright
 
 from app.automation.canary import format_report, run_canary
 from app.automation.errors import NeedsLoginError
-from app.automation.notebooklm_ui import build_registry
-from app.automation.steps import check_session
+from app.automation.notebooklm_ui import build_registry, page_has_landed
+from app.automation.steps import check_session, wait_until
 from app.core.config import settings
 from app.services.notebooklm_service import NotebookLMService
 
@@ -41,7 +41,7 @@ def main() -> int:
             context = browser.new_context(storage_state=storage_path, viewport={"width": 1440, "height": 900})
             page = context.new_page()
             page.goto(settings.NOTEBOOKLM_URL, wait_until="domcontentloaded", timeout=45000)
-            page.wait_for_timeout(4000)
+            wait_until(page, lambda: page_has_landed(page, registry), timeout_ms=15_000)
             try:
                 check_session(page)
             except NeedsLoginError:
@@ -51,7 +51,7 @@ def main() -> int:
 
             if args.notebook_url:
                 page.goto(args.notebook_url, wait_until="domcontentloaded", timeout=45000)
-                page.wait_for_timeout(4000)
+                wait_until(page, lambda: page_has_landed(page, registry), timeout_ms=15_000)
                 results += [r for r in run_canary(page, registry, {"notebook"}) if r.status != "skipped"]
         finally:
             browser.close()

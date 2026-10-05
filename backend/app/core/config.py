@@ -42,6 +42,13 @@ class Settings(BaseSettings):
     NOTEBOOKLM_RESUME_MAX_AGE_SECONDS: int = int(
         os.getenv("NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", "7200")
     )
+    # Human-like pacing of the browser automation: short random pauses, a real
+    # mouse move before clicks, long text entered in pieces. Off in tests.
+    NOTEBOOKLM_HUMAN_PACING: bool = os.getenv("NOTEBOOKLM_HUMAN_PACING", "true").lower() == "true"
+    NOTEBOOKLM_PACING_MIN_MS: int = int(os.getenv("NOTEBOOKLM_PACING_MIN_MS", "400"))
+    NOTEBOOKLM_PACING_MAX_MS: int = int(os.getenv("NOTEBOOKLM_PACING_MAX_MS", "1500"))
+    # How long the Slide Deck control must stay enabled before we use it.
+    NOTEBOOKLM_READY_STABLE_SECONDS: float = float(os.getenv("NOTEBOOKLM_READY_STABLE_SECONDS", "3"))
     # Comma-separated texts NotebookLM shows when it refuses new Slide Decks.
     # Empty until the real wording is captured (see issue #13), so quota
     # detection stays off instead of guessing.

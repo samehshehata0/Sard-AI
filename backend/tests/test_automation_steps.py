@@ -204,3 +204,21 @@ def test_wait_until_gives_up_at_the_timeout():
     page = FakePage()
     assert wait_until(page, lambda: False, timeout_ms=1000, interval_ms=250) is False
     assert page.waited_ms == 1000
+
+
+def test_wait_until_stable_needs_the_condition_to_hold_continuously():
+    from app.automation.steps import wait_until_stable
+
+    page = FakePage()
+    states = iter([True, True, False, True, True, True, True, True, True])
+    assert wait_until_stable(page, lambda: next(states), stable_ms=1500, timeout_ms=20_000, interval_ms=500) is True
+    # Two good polls, a flip (reset), then it must hold for 1500ms again.
+    assert page.waited_ms == 3000
+
+
+def test_wait_until_stable_gives_up_at_the_timeout():
+    from app.automation.steps import wait_until_stable
+
+    page = FakePage()
+    assert wait_until_stable(page, lambda: False, stable_ms=1000, timeout_ms=3000, interval_ms=500) is False
+    assert page.waited_ms == 3000
