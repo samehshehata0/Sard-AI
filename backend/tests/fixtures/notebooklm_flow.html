@@ -1,0 +1,38 @@
+<!doctype html>
+<!-- Synthetic NotebookLM notebook page: a Slide Deck card whose Customize button
+     opens the Slide Deck dialog. Generate now closes it and shows the generating
+     state, Generate later only closes it. -->
+<html>
+<body>
+  <div class="notebook-editor"><p>Notebook</p></div>
+  <div class="card">
+    <basic-create-artifact-button aria-label="مجموعة الشرايح">Slides</basic-create-artifact-button>
+    <button aria-label="Customize Slide Deck" id="customize">edit</button>
+  </div>
+  <div id="host"></div>
+  <script>
+    window.clicked = [];
+    window.submitted = null;
+    document.getElementById('customize').addEventListener('click', () => {
+      document.getElementById('host').innerHTML = `
+        <configurable-form-dialog id="dialog"><div>
+          <textarea id="prompt" rows="4" cols="40"></textarea>
+          <mat-dialog-actions><span>
+            <span><nb-button><button id="later">Generate later</button></nb-button></span>
+            <span><nb-button><button id="now">Generate</button></nb-button></span>
+          </span></mat-dialog-actions>
+        </div></configurable-form-dialog>`;
+      document.querySelectorAll('#dialog button').forEach(b => b.addEventListener('click', () => {
+        window.clicked.push(b.id);
+        if (b.id === 'now') {
+          window.submitted = document.getElementById('prompt').value;
+          const card = document.createElement('div');
+          card.textContent = 'Creating slide deck';
+          document.body.appendChild(card);
+        }
+        document.getElementById('dialog').remove();
+      }));
+    });
+  </script>
+</body>
+</html>

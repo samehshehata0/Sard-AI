@@ -35,6 +35,38 @@ def wait_until(page: Page, predicate: Callable[[], bool], timeout_ms: int = 15_0
         waited += interval_ms
 
 
+def wait_until_stable(
+    page: Page,
+    predicate: Callable[[], bool],
+    stable_ms: int,
+    timeout_ms: int = 30_000,
+    interval_ms: int = 500,
+) -> bool:
+    """Wait until a condition has held continuously for `stable_ms`.
+
+    A condition that flips back resets the clock, so a control that is only
+    briefly enabled does not count as ready.
+    """
+    waited = 0
+    holding_since: Optional[int] = None
+    while True:
+        try:
+            holds = bool(predicate())
+        except Exception:
+            holds = False
+        if holds:
+            if holding_since is None:
+                holding_since = waited
+            if waited - holding_since >= stable_ms:
+                return True
+        else:
+            holding_since = None
+        if waited >= timeout_ms:
+            return False
+        page.wait_for_timeout(interval_ms)
+        waited += interval_ms
+
+
 def check_session(page: Page, quota_markers: tuple[str, ...] = ()) -> None:
     """Raise a typed error if the page shows an expired login or a quota refusal."""
     if "accounts.google.com" in page.url or "signin" in page.url:

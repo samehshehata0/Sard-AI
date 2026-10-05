@@ -365,4 +365,14 @@ def build_registry() -> LocatorRegistry:
     return registry
 
 
-__all__ = ["build_registry", "GENERATING_INDICATOR"]
+def page_has_landed(page, registry: LocatorRegistry) -> bool:
+    """True once NotebookLM has rendered something we can act on, or the login page."""
+    if "accounts.google.com" in page.url or "signin" in page.url:
+        return True
+    return any(
+        registry.find(page, key) is not None
+        for key in (NEW_NOTEBOOK_BUTTON, NOTEBOOK_EDITOR, WELCOME_PAGE)
+    )
+
+
+__all__ = ["build_registry", "page_has_landed", "GENERATING_INDICATOR"]

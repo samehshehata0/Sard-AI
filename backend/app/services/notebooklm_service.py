@@ -16,6 +16,7 @@ from app.automation.errors import (
 )
 from app.automation.evidence import capture_evidence
 from app.automation.locators import LocatorNotFoundError
+from app.automation.pacing import HumanPacer
 from app.automation.notebooklm_ui import (
     ADD_SOURCES_BUTTON,
     ARTIFACT_DOWNLOAD_PDF,
@@ -47,9 +48,10 @@ from app.automation.notebooklm_ui import (
     WELCOME_CREATE_BUTTON,
     WELCOME_PAGE,
     build_registry,
+    page_has_landed,
 )
 from app.automation.slide_deck import click_generate_now
-from app.automation.steps import check_session, run_step, wait_until
+from app.automation.steps import check_session, run_step, wait_until, wait_until_stable
 from app.core.config import settings
 
 
@@ -62,6 +64,7 @@ class NotebookLMService:
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
         self.registry = build_registry()
+        self.pacer = HumanPacer.from_settings(settings)
 
     def _storage_state_path(self) -> Optional[str]:
         possible_paths = [
@@ -121,10 +124,21 @@ class NotebookLMService:
         for _, locator in self.registry.candidates(page, DISMISS_KNOWN):
             try:
                 if locator.count() and locator.is_visible(timeout=400):
-                    locator.click(force=True)
-                    page.wait_for_timeout(500)
+                    self.pacer.click(page, locator)
+                    wait_until(page, lambda: not locator.is_visible(), timeout_ms=1500, interval_ms=100)
             except Exception:
                 continue
+
+    def _wait_for_reaction(self, page: Page, before_url: str, before_modal: bool, before_welcome: bool) -> None:
+        """After a click, wait until the page visibly reacts (or briefly give up)."""
+        wait_until(
+            page,
+            lambda: page.url != before_url
+            or self._has_visible_modal(page) != before_modal
+            or self._on_welcome_page(page) != before_welcome,
+            timeout_ms=2000,
+            interval_ms=150,
+        )
 
     def _on_welcome_page(self, page: Page) -> bool:
         try:
@@ -147,7 +161,7 @@ class NotebookLMService:
         except Exception:
             return False
 
-    def _click_first(self, page: Page, key: str, timeout: int = 1500) -> bool:
+    def _click_first(self, page: Page, key: str, timeout: int = 1500, paced: bool = True) -> bool:
         for strategy, locator in self.registry.candidates(page, key):
             for attempt in range(3):
                 try:
@@ -158,8 +172,11 @@ class NotebookLMService:
                     before_modal = self._has_visible_modal(page)
                     before_welcome = self._on_welcome_page(page)
 
-                    locator.click(force=True)
-                    page.wait_for_timeout(600)
+                    if paced:
+                        self.pacer.click(page, locator)
+                    else:
+                        locator.click(force=True)
+                    self._wait_for_reaction(page, before_url, before_modal, before_welcome)
 
                     after_url = page.url
                     after_modal = self._has_visible_modal(page)
@@ -205,7 +222,8 @@ class NotebookLMService:
                 wait_until="domcontentloaded",
                 timeout=45000,
             )
-        page.wait_for_timeout(3500)
+        wait_until(page, lambda: self._page_has_notebook_editor(page), timeout_ms=15_000)
+        self.pacer.pause(page)
         self._handle_dialogs(page)
 
     def _dismiss_onboarding_dialogs(self, page: Page) -> None:
@@ -225,10 +243,10 @@ class NotebookLMService:
             for strategy, locator in self.registry.candidates(modal.locator, DISMISS_ONBOARDING):
                 try:
                     if locator.count() and locator.is_visible(timeout=500):
-                        locator.click(force=True)
+                        self.pacer.click(page, locator)
                         logger.info("[Sard] Dismissed NotebookLM onboarding dialog via: %s", strategy.name)
                         clicked = True
-                        page.wait_for_timeout(800)
+                        wait_until(page, lambda: self.registry.find(page, MODAL) is None, timeout_ms=2000, interval_ms=150)
                         break
                 except Exception:
                     continue
@@ -236,7 +254,7 @@ class NotebookLMService:
             if not clicked:
                 try:
                     page.keyboard.press("Escape")
-                    page.wait_for_timeout(800)
+                    wait_until(page, lambda: self.registry.find(page, MODAL) is None, timeout_ms=2000, interval_ms=150)
                 except Exception:
                     pass
 
@@ -272,24 +290,21 @@ class NotebookLMService:
 
         if self.registry.find(page, COPIED_TEXT_OPTION) is None:
             self._click_first(page, ADD_SOURCES_BUTTON)
-            page.wait_for_timeout(1500)
+            wait_until(page, lambda: self.registry.find(page, COPIED_TEXT_OPTION) is not None, timeout_ms=5000)
 
         for _, option in self.registry.candidates(page, COPIED_TEXT_OPTION):
             try:
                 if not option.count() or not option.is_visible(timeout=1200):
                     continue
-                option.click(force=True)
-                page.wait_for_timeout(1000)
+                self.pacer.click(page, option)
                 text_area = self.registry.resolve(page, PASTE_TEXT_AREA, timeout_ms=5000).locator
+                self.pacer.pause(page)
+                # A person pastes the source in one go, so it is filled at once.
                 text_area.fill(story_text)
                 insert_button = self.registry.resolve(page, INSERT_SOURCE_BUTTON, timeout_ms=5000).locator
-                for _ in range(20):
-                    if insert_button.is_enabled():
-                        break
-                    page.wait_for_timeout(250)
-                if not insert_button.is_enabled():
+                if not wait_until(page, insert_button.is_enabled, timeout_ms=5000, interval_ms=250):
                     raise TransientStepError("Copied-text insert button was unavailable")
-                insert_button.click()
+                self.pacer.click(page, insert_button, force=False)
                 logger.info("[Sard] NotebookLM source uploaded as copied text")
                 return
             except Exception:
@@ -309,29 +324,28 @@ class NotebookLMService:
 
     def _request_slide_deck(self, page: Page, prompt: str) -> None:
         page.keyboard.press("Escape")
-        page.wait_for_timeout(1500)
+        wait_until(page, lambda: not self._has_visible_modal(page), timeout_ms=3000, interval_ms=150)
+        self._wait_until_ready_to_generate(page)
 
         try:
             slide_control = self.registry.resolve(page, SLIDE_DECK_BUTTON, timeout_ms=10_000)
         except LocatorNotFoundError as exc:
             raise TransientStepError("NotebookLM Slide Deck control was not found") from exc
 
-        page.wait_for_timeout(1500)
+        self.pacer.pause(page)
 
         customized = False
         try:
             card = self.registry.find(slide_control.locator, SLIDE_DECK_CARD)
             customize = self.registry.find(card.locator, CUSTOMIZE_BUTTON) if card else None
             if customize is not None:
-                customize.locator.click(force=True)
+                self.pacer.click(page, customize.locator)
                 customized = True
         except Exception:
             customized = False
 
         if not customized:
-            slide_control.locator.click(force=True)
-
-        page.wait_for_timeout(2500)
+            self.pacer.click(page, slide_control.locator)
 
         try:
             dialog = self.registry.resolve(page, SLIDE_DECK_DIALOG, timeout_ms=5000).locator
@@ -343,8 +357,8 @@ class NotebookLMService:
             prompt_field = self.registry.find(dialog, PROMPT_FIELD)
             if prompt_field is None:
                 raise TransientStepError("Slide Deck dialog has no prompt field")
-            prompt_field.locator.fill(prompt)
-            click_generate_now(page, self.registry)
+            self.pacer.type_text(page, prompt_field.locator, prompt)
+            click_generate_now(page, self.registry, pacer=self.pacer)
         else:
             # NotebookLM accepted the click without an inline dialog; still
             # require proof that generation started.
@@ -353,6 +367,29 @@ class NotebookLMService:
             except LocatorNotFoundError as exc:
                 raise TransientStepError(str(exc)) from exc
             logger.info("[Sard] NotebookLM slide-deck generation started without an inline dialog")
+
+    def _wait_until_ready_to_generate(self, page: Page) -> None:
+        """Wait until the Slide Deck control has stayed enabled for a few seconds.
+
+        This replaces a blind pause after indexing. If NotebookLM never settles
+        we carry on, as before; the Generate now check still catches a real failure.
+        """
+
+        def control_ready() -> bool:
+            control = self.registry.find(page, SLIDE_DECK_BUTTON)
+            if control is None:
+                return False
+            return control.locator.is_enabled() and control.locator.get_attribute("aria-disabled") != "true"
+
+        ready = wait_until_stable(
+            page,
+            control_ready,
+            stable_ms=int(settings.NOTEBOOKLM_READY_STABLE_SECONDS * 1000),
+            timeout_ms=60_000,
+            interval_ms=500,
+        )
+        if not ready:
+            logger.warning("[Sard] NotebookLM Slide Deck control did not settle within 60s; continuing")
 
     def _wait_for_source_indexing(self, page: Page, story_text: str) -> None:
         title = next(
@@ -407,7 +444,12 @@ class NotebookLMService:
                     more = self.registry.find(artifact.locator, ARTIFACT_MORE_BUTTON)
                     if more is not None:
                         more.locator.click(force=True)
-                        page.wait_for_timeout(500)
+                        wait_until(
+                            page,
+                            lambda: self.registry.find(page, ARTIFACT_DOWNLOAD_PDF) is not None,
+                            timeout_ms=2000,
+                            interval_ms=100,
+                        )
                         pdf_download = self.registry.find(page, ARTIFACT_DOWNLOAD_PDF)
                         if pdf_download is not None:
                             path = self._save_download(page, pdf_download.locator, target_dir)
@@ -418,8 +460,7 @@ class NotebookLMService:
                     page.keyboard.press("Escape")
 
             # Open the finished artifact card/viewer if it is ready.
-            self._click_first(page, ARTIFACT_OPEN_CARD, timeout=500)
-            page.wait_for_timeout(800)
+            self._click_first(page, ARTIFACT_OPEN_CARD, timeout=500, paced=False)
 
             for _, control in self.registry.candidates(page, DOWNLOAD_CONTROL):
                 try:
@@ -499,7 +540,7 @@ class NotebookLMService:
                     wait_until="domcontentloaded",
                     timeout=45000,
                 )
-                page.wait_for_timeout(4000)
+                wait_until(page, lambda: page_has_landed(page, self.registry), timeout_ms=15_000)
 
                 evidence_dir = os.path.join(target_dir, "notebooklm_artifacts")
                 quota_markers = settings.NOTEBOOKLM_QUOTA_MARKERS
@@ -534,7 +575,6 @@ class NotebookLMService:
                         pre=lambda: self._page_has_notebook_editor(page),
                         post=lambda: self._wait_for_source_indexing(page, story_text),
                     )
-                    page.wait_for_timeout(15000)
                     step("request_slide_deck", lambda: self._request_slide_deck(page, prompt))
                     self._save_job_state(target_dir, page.url)
                     artifact_path = step("collect", lambda: self._download_artifact(page, target_dir))
@@ -587,7 +627,12 @@ class NotebookLMService:
                         except Exception:
                             continue
 
-                    page.wait_for_timeout(400)
+                    wait_until(
+                        page,
+                        lambda: self.registry.find(page, HAMBURGER_MENU_ITEM) is not None,
+                        timeout_ms=1500,
+                        interval_ms=100,
+                    )
                     download_item = self.registry.find(page, HAMBURGER_MENU_ITEM)
                     if download_item is not None:
                         return self._save_download(page, download_item.locator, target_dir)
