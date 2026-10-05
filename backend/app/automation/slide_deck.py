@@ -59,8 +59,7 @@ def _require_last_of_two_actions(button: Locator) -> None:
         )
 
 
-def build_registry() -> LocatorRegistry:
-    registry = LocatorRegistry()
+def register_slide_deck(registry: LocatorRegistry) -> LocatorRegistry:
     registry.register(
         GENERATE_NOW,
         (
@@ -83,6 +82,7 @@ def build_registry() -> LocatorRegistry:
             ),
         ),
         validator=_require_last_of_two_actions,
+        screen="slide_deck_dialog",
     )
     registry.register(
         GENERATING_INDICATOR,
@@ -90,8 +90,13 @@ def build_registry() -> LocatorRegistry:
             Strategy("text-ar", "text=جارٍ إنشاء مجموعة الشرائح"),
             Strategy("text-en", "text=Creating slide deck"),
         ),
+        screen="generating",
     )
     return registry
+
+
+def build_registry() -> LocatorRegistry:
+    return register_slide_deck(LocatorRegistry())
 
 
 def click_generate_now(

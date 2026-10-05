@@ -20,6 +20,7 @@ Python backend (video/NotebookLM pipeline, in `backend/`, has its own `.venv`):
 
 - `npm run backend` — equivalent to `cd backend && python run.py` (uvicorn on `127.0.0.1:8000`, reload on)
 - `npm run auth` — `cd backend && python save_auth.py`, captures a Playwright storage-state login for NotebookLM (interactive, run manually when the session expires)
+- `npm run canary` — `cd backend && python notebooklm_canary.py [--notebook-url URL]`, checks the live NotebookLM UI against the locator registry (`backend/app/automation/notebooklm_ui.py`) and reports which strategy matches per element; exits non-zero if a required element is missing (needs the saved login, exits 2 if it expired)
 - `cd backend && .venv/bin/pytest` — run backend tests
 - `cd backend && .venv/bin/pytest tests/test_video_pipeline.py -k name` — single backend test
 

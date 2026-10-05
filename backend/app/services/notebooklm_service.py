@@ -16,12 +16,39 @@ from app.automation.errors import (
 )
 from app.automation.evidence import capture_evidence
 from app.automation.locators import LocatorNotFoundError
-from app.automation.slide_deck import (
-    DIALOG,
+from app.automation.notebooklm_ui import (
+    ADD_SOURCES_BUTTON,
+    ARTIFACT_DOWNLOAD_PDF,
+    ARTIFACT_ITEM,
+    ARTIFACT_MORE_BUTTON,
+    ARTIFACT_OPEN_CARD,
+    COPIED_TEXT_OPTION,
+    CUSTOMIZE_BUTTON,
+    DISMISS_KNOWN,
+    DISMISS_ONBOARDING,
+    DOWNLOAD_CONTROL,
+    DOWNLOAD_MENU_ITEM,
+    FILE_INPUT,
     GENERATING_INDICATOR,
+    HAMBURGER_BUTTON,
+    HAMBURGER_MENU_ITEM,
+    HAMBURGER_OWNER_BUTTON,
+    INSERT_SOURCE_BUTTON,
+    MODAL,
+    NEW_NOTEBOOK_BUTTON,
+    NOTEBOOK_EDITOR,
+    OVERFLOW_MENU_BUTTON,
+    PASTE_TEXT_AREA,
+    PROMPT_FIELD,
+    SLIDE_DECK_BUTTON,
+    SLIDE_DECK_CARD,
+    SLIDE_DECK_DIALOG,
+    SOURCE_TITLE,
+    WELCOME_CREATE_BUTTON,
+    WELCOME_PAGE,
     build_registry,
-    click_generate_now,
 )
+from app.automation.slide_deck import click_generate_now
 from app.automation.steps import check_session, run_step, wait_until
 from app.core.config import settings
 
@@ -34,6 +61,7 @@ class NotebookLMService:
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
+        self.registry = build_registry()
 
     def _storage_state_path(self) -> Optional[str]:
         possible_paths = [
@@ -90,27 +118,8 @@ class NotebookLMService:
         return None
 
     def _handle_dialogs(self, page: Page) -> None:
-        for selector in (
-            "[role='dialog'] button:has-text('Got it')",
-            "[role='dialog'] button:has-text('Dismiss')",
-            "[role='dialog'] button:has-text('Accept all')",
-            "[role='dialog'] button:has-text('موافق')",
-            "[role='dialog'] button:has-text('فهمت')",
-            "[role='dialog'] button:has-text('حسنًا')",
-            "[role='dialog'] button:has-text('لنبدأ')",
-            "[role='dialog'] button:has-text('ابدأ')",
-            "[role='dialog'] button:has-text('Get started')",
-            "[role='dialog'] button:has-text('Let\'s get started')",
-            "[role='dialog'] button:has-text('تجاهل')",
-            "[role='dialog'] button:has-text('OK')",
-            "[role='alertdialog'] button:has-text('OK')",
-            "[role='alertdialog'] button:has-text('حسنًا')",
-            "[role='alertdialog'] button:has-text('لنبدأ')",
-            "[role='alertdialog'] button:has-text('ابدأ')",
-            "[role='alertdialog'] button:has-text('Get started')",
-        ):
+        for _, locator in self.registry.candidates(page, DISMISS_KNOWN):
             try:
-                locator = page.locator(selector).first
                 if locator.count() and locator.is_visible(timeout=400):
                     locator.click(force=True)
                     page.wait_for_timeout(500)
@@ -119,38 +128,29 @@ class NotebookLMService:
 
     def _on_welcome_page(self, page: Page) -> bool:
         try:
-            welcome = page.locator("welcome-page, .welcome-page-container").first
-            create_button = page.locator(
-                "button.create-new-button, .create-new-button, [aria-label*='إنشاء ورقة ملاحظات جديدة']"
-            ).first
-            return (welcome.count() > 0 and welcome.is_visible(timeout=250)) or (
-                create_button.count() > 0 and create_button.is_visible(timeout=250)
+            return (
+                self.registry.find(page, WELCOME_PAGE) is not None
+                or self.registry.find(page, WELCOME_CREATE_BUTTON) is not None
             )
         except Exception:
             return False
 
     def _has_visible_modal(self, page: Page) -> bool:
         try:
-            modal = page.locator("[role='dialog'], [role='alertdialog'], [aria-modal='true']").first
-            return modal.count() > 0 and modal.is_visible(timeout=250)
+            return self.registry.find(page, MODAL) is not None
         except Exception:
             return False
 
     def _page_has_notebook_editor(self, page: Page) -> bool:
         try:
-            notebook_url = "/notebook/" in page.url
-            notebook_header = page.locator(
-                ".notebook-header-container, .notebook-page, .notebook-editor, textarea, [contenteditable='true']").first
-            editor_visible = notebook_header.count() > 0 and notebook_header.is_visible(timeout=300)
-            return notebook_url or editor_visible
+            return "/notebook/" in page.url or self.registry.find(page, NOTEBOOK_EDITOR) is not None
         except Exception:
             return False
 
-    def _click_first(self, page: Page, selectors: tuple[str, ...], timeout: int = 1500) -> bool:
-        for selector in selectors:
+    def _click_first(self, page: Page, key: str, timeout: int = 1500) -> bool:
+        for strategy, locator in self.registry.candidates(page, key):
             for attempt in range(3):
                 try:
-                    locator = page.locator(selector).first
                     if not locator.count() or not locator.is_visible(timeout=timeout):
                         continue
 
@@ -167,76 +167,38 @@ class NotebookLMService:
                     after_notebook = self._page_has_notebook_editor(page)
 
                     page_advanced = "/notebook/" in after_url or (after_notebook and not before_welcome)
-                    modal_closed = before_modal and not after_modal
                     welcome_released = before_welcome and not after_welcome
 
                     if page_advanced or (welcome_released and after_notebook):
-                        logger.info("[Sard] NotebookLM clicked control and the page really advanced: %s", selector)
+                        logger.info("[Sard] NotebookLM clicked '%s' and the page really advanced: %s", key, strategy.name)
                         return True
 
                     if before_welcome and after_welcome:
                         logger.warning(
-                            "[Sard] Click on '%s' did not leave the welcome page; retrying (%s/3)",
-                            selector,
+                            "[Sard] Click on '%s' (%s) did not leave the welcome page; retrying (%s/3)",
+                            key,
+                            strategy.name,
                             attempt + 1,
                         )
                         continue
 
                     if before_modal and after_modal and before_url == after_url:
                         logger.warning(
-                            "[Sard] Click on '%s' was swallowed by a modal; retrying (%s/3)",
-                            selector,
+                            "[Sard] Click on '%s' (%s) was swallowed by a modal; retrying (%s/3)",
+                            key,
+                            strategy.name,
                             attempt + 1,
                         )
                         continue
 
-                    logger.info("[Sard] NotebookLM clicked control: %s", selector)
+                    logger.info("[Sard] NotebookLM clicked '%s': %s", key, strategy.name)
                     return True
                 except Exception:
                     continue
         return False
 
     def _create_notebook(self, page: Page) -> None:
-        # NotebookLM's current UI uses a "new note / new notebook" card/button in Arabic
-        # on the main landing page, not the older English text-only selectors.
-        home_page_new_selectors = (
-            "button:has-text('إنشاء دفتر ملاحظات')",
-            "button:has-text('إنشاء دفتر ملاحظات جديد')",
-            "button:has-text('إضافة ملاحظة جديدة')",
-            "button:has-text('Add note')",
-            "button:has-text('New note')",
-            "button:has-text('New notebook')",
-            "button:has-text('Create new note')",
-            "button:has-text('Create new notebook')",
-            "button:has-text('Create notebook')",
-            "button:has-text('Create new')",
-            "button:has-text('دفتر ملاحظات جديد')",
-            "[aria-label='إنشاء دفتر ملاحظات']",
-            "[aria-label='إنشاء دفتر ملاحظات جديد']",
-            "[aria-label='إضافة ملاحظة جديدة']",
-            "[aria-label='Create new note']",
-            "[aria-label='Create new notebook']",
-            "[aria-label='Create new']",
-            "[aria-label='New notebook']",
-            "[aria-label='New note']",
-            "div:has-text('إضافة ملاحظة جديدة')",
-            "div:has-text('New note')",
-            "div:has-text('Create new')",
-            "button.create-new-button",
-        )
-
-        created = self._click_first(page, home_page_new_selectors, timeout=2500)
-        if not created:
-            legacy_selectors = (
-                "button:has-text('New Notebook')",
-                "button:has-text('Create new')",
-                "button:has-text('Create notebook')",
-                "button:has-text('دفتر ملاحظات جديد')",
-                "[aria-label='إنشاء ورقة ملاحظات جديدة']",
-                "[aria-label='Create new notebook']",
-                "[aria-label='Create new']",
-            )
-            created = self._click_first(page, legacy_selectors, timeout=2500)
+        created = self._click_first(page, NEW_NOTEBOOK_BUTTON, timeout=2500)
         if not created:
             page.goto(
                 "https://notebooklm.google.com/notebook/new",
@@ -252,42 +214,19 @@ class NotebookLMService:
         on first use or after login. These popups can block the UI and must be
         dismissed before proceeding with source upload.
         """
-        modal_selector = "[role='dialog'], [role='alertdialog'], [aria-modal='true']"
-        dismiss_selectors = (
-            "button:has-text('حسنًا')",
-            "button:has-text('لنبدأ')",
-            "button:has-text('ابدأ')",
-            "button:has-text('OK')",
-            "button:has-text('Get started')",
-            "button:has-text('Let\'s get started')",
-            "button:has-text('Got it')",
-            "button:has-text('I understand')",
-            "button:has-text('موافق')",
-            "button:has-text('فهمت')",
-            "button:has-text('Continue')",
-            "button:has-text('Next')",
-            "button:has-text('Dismiss')",
-            "button:has-text('Close')",
-            "button:has-text('تجاهل')",
-            "button:has-text('إغلاق')",
-        )
-
         for attempt in range(8):
-            modal = page.locator(modal_selector).first
-            if modal.count() == 0:
-                return
-            if not modal.is_visible(timeout=500):
+            modal = self.registry.find(page, MODAL)
+            if modal is None:
                 return
 
             before_url = page.url
             before_welcome = self._on_welcome_page(page)
             clicked = False
-            for selector in dismiss_selectors:
+            for strategy, locator in self.registry.candidates(modal.locator, DISMISS_ONBOARDING):
                 try:
-                    locator = modal.locator(selector).first
                     if locator.count() and locator.is_visible(timeout=500):
                         locator.click(force=True)
-                        logger.info("[Sard] Dismissed NotebookLM onboarding dialog via: %s", selector)
+                        logger.info("[Sard] Dismissed NotebookLM onboarding dialog via: %s", strategy.name)
                         clicked = True
                         page.wait_for_timeout(800)
                         break
@@ -301,8 +240,7 @@ class NotebookLMService:
                 except Exception:
                     pass
 
-            after_modal = page.locator(modal_selector)
-            modal_still_visible = after_modal.count() > 0 and after_modal.first.is_visible(timeout=400)
+            modal_still_visible = self.registry.find(page, MODAL) is not None
             after_welcome = self._on_welcome_page(page)
             after_notebook = self._page_has_notebook_editor(page)
 
@@ -328,55 +266,23 @@ class NotebookLMService:
 
     def _upload_source(self, page: Page, source_path: str, story_text: str) -> None:
         self._dismiss_onboarding_dialogs(page)
-        if page.locator("[role='dialog'], [role='alertdialog'], [aria-modal='true']").count() > 0:
+        if self._has_visible_modal(page):
             logger.warning("[Sard] NotebookLM modal still active after dismiss attempt; retrying dismissal before upload")
             self._dismiss_onboarding_dialogs(page)
-        copied_text_selectors = (
-            "button:has-text('Copied text')",
-            "button:has-text('Text')",
-            "mat-card:has-text('Copied text')",
-            "button:has-text('نص منسوخ')",
-        )
-        copied_text_visible = any(
-            page.locator(selector).first.count()
-            and page.locator(selector).first.is_visible(timeout=500)
-            for selector in copied_text_selectors
-        )
-        if not copied_text_visible:
-            self._click_first(
-                page,
-                (
-                    "button:has-text('إضافة مصادر')",
-                    "button:has-text('Add sources')",
-                    "button[aria-label='إضافة مصدر']",
-                    "button[aria-label='Add sources']",
-                    "[aria-label='إضافة مصدر']",
-                    "[aria-label='Add sources']",
-                    "button:has-text('إضافة مصدر')",
-                ),
-            )
+
+        if self.registry.find(page, COPIED_TEXT_OPTION) is None:
+            self._click_first(page, ADD_SOURCES_BUTTON)
             page.wait_for_timeout(1500)
 
-        for selector in copied_text_selectors:
+        for _, option in self.registry.candidates(page, COPIED_TEXT_OPTION):
             try:
-                option = page.locator(selector).first
                 if not option.count() or not option.is_visible(timeout=1200):
                     continue
                 option.click(force=True)
                 page.wait_for_timeout(1000)
-                text_area = page.locator(
-                    "textarea[placeholder*='الصق النص'], textarea[placeholder*='Paste text']"
-                ).last
-                if not text_area.count():
-                    text_area = page.locator("[role='dialog'] textarea").last
-                text_area.wait_for(state="visible", timeout=5000)
+                text_area = self.registry.resolve(page, PASTE_TEXT_AREA, timeout_ms=5000).locator
                 text_area.fill(story_text)
-                insert_button = page.locator(
-                    "[role='dialog'] button:has-text('إدراج'), "
-                    "[role='dialog'] button:has-text('Insert'), "
-                    "[role='dialog'] button:has-text('Save')"
-                ).last
-                insert_button.wait_for(state="visible", timeout=5000)
+                insert_button = self.registry.resolve(page, INSERT_SOURCE_BUTTON, timeout_ms=5000).locator
                 for _ in range(20):
                     if insert_button.is_enabled():
                         break
@@ -390,11 +296,12 @@ class NotebookLMService:
                 continue
 
         try:
-            file_input = page.locator("input[type='file']").first
-            if file_input.count():
-                file_input.set_input_files(source_path)
-                logger.info("[Sard] NotebookLM source uploaded as file")
-                return
+            # The file input is usually hidden, so it only needs to exist.
+            for _, file_input in self.registry.candidates(page, FILE_INPUT):
+                if file_input.count():
+                    file_input.set_input_files(source_path)
+                    logger.info("[Sard] NotebookLM source uploaded as file")
+                    return
         except Exception as exc:
             raise TransientStepError(f"NotebookLM source upload failed: {exc}") from exc
 
@@ -404,70 +311,45 @@ class NotebookLMService:
         page.keyboard.press("Escape")
         page.wait_for_timeout(1500)
 
-        slide_selectors = (
-            "div[role='button'][aria-label='مجموعة شرائح']",
-            "basic-create-artifact-button[aria-label='مجموعة الشرايح']",
-            "button[aria-label=' مجموعة الشرايح']",
-            "[aria-label=' مجموعة الشرايح']",
-            "button:has-text('مجموعة الشرايح')",
-            "button:has-text('Slide Deck')",
-            "button:has-text('Slides')",
-            "[role='button'][aria-label=' مجموعة الشرايح']",
-            "[role='button']:has-text(' مجموعة الشرائح')",
-            "button:has-text('عرض شرائح')",
-            "[aria-label*='Slide Deck']",
-            "[aria-label*='عرض شرائح']",
-        )
-        slide_control = None
-        for selector in slide_selectors:
-            try:
-                candidate = page.locator(selector).first
-                if candidate.count() and candidate.is_visible(timeout=2500):
-                    slide_control = candidate
-                    break
-            except Exception:
-                continue
-        if slide_control is None:
-            raise TransientStepError("NotebookLM Slide Deck control was not found")
+        try:
+            slide_control = self.registry.resolve(page, SLIDE_DECK_BUTTON, timeout_ms=10_000)
+        except LocatorNotFoundError as exc:
+            raise TransientStepError("NotebookLM Slide Deck control was not found") from exc
 
         page.wait_for_timeout(1500)
 
         customized = False
         try:
-            container = slide_control.locator("xpath=ancestor::*[self::div or self::mat-card][1]")
-            customize = container.locator(
-                "button[aria-label*='ustom'], button[title*='ustom'], button:has-text('Customize'), button:has-text('تخصيص')"
-            ).first
-            if customize.count() and customize.is_visible(timeout=1500):
-                customize.click(force=True)
+            card = self.registry.find(slide_control.locator, SLIDE_DECK_CARD)
+            customize = self.registry.find(card.locator, CUSTOMIZE_BUTTON) if card else None
+            if customize is not None:
+                customize.locator.click(force=True)
                 customized = True
         except Exception:
             customized = False
 
         if not customized:
-            slide_control.click(force=True)
+            slide_control.locator.click(force=True)
 
         page.wait_for_timeout(2500)
 
-        registry = build_registry()
-        dialog = page.locator(DIALOG).first
         try:
-            dialog.wait_for(state="visible", timeout=5000)
+            dialog = self.registry.resolve(page, SLIDE_DECK_DIALOG, timeout_ms=5000).locator
             dialog_open = True
-        except Exception:
+        except LocatorNotFoundError:
             dialog_open = False
 
         if dialog_open:
-            text_area = dialog.locator("textarea, [contenteditable='true']").first
-            if not text_area.count() or not text_area.is_visible():
+            prompt_field = self.registry.find(dialog, PROMPT_FIELD)
+            if prompt_field is None:
                 raise TransientStepError("Slide Deck dialog has no prompt field")
-            text_area.fill(prompt)
-            click_generate_now(page, registry)
+            prompt_field.locator.fill(prompt)
+            click_generate_now(page, self.registry)
         else:
             # NotebookLM accepted the click without an inline dialog; still
             # require proof that generation started.
             try:
-                registry.resolve(page, GENERATING_INDICATOR, timeout_ms=60_000)
+                self.registry.resolve(page, GENERATING_INDICATOR, timeout_ms=60_000)
             except LocatorNotFoundError as exc:
                 raise TransientStepError(str(exc)) from exc
             logger.info("[Sard] NotebookLM slide-deck generation started without an inline dialog")
@@ -478,13 +360,13 @@ class NotebookLMService:
             "",
         )
         if title:
-            page.get_by_text(title, exact=False).last.wait_for(state="visible", timeout=90000)
-        page.locator(
-            "div[role='button'][aria-label='مجموعة شرائح'], "
-            "basic-create-artifact-button[aria-label='مجموعة الشرايح'], "
-            "button[aria-label=' مجموعة الشرايح'], "
-            "button:has-text('مجموعة الشرايح')"
-        ).first.wait_for(state="visible", timeout=90000)
+            self.registry.resolve(
+                page,
+                SOURCE_TITLE,
+                timeout_ms=90_000,
+                params={"text": json.dumps(title, ensure_ascii=False)},
+            )
+        self.registry.resolve(page, SLIDE_DECK_BUTTON, timeout_ms=90_000)
         logger.info("[Sard] NotebookLM source indexing completed")
 
     def _save_download(self, page: Page, control, target_dir: str) -> Optional[str]:
@@ -519,25 +401,16 @@ class NotebookLMService:
 
             # Current NotebookLM Arabic UI exposes completed slide decks as
             # artifact-library-item cards with PDF/PPTX downloads in a local menu.
-            artifact_items = page.locator(
-                "artifact-library-item:has(button[aria-description='مجموعة الشرائح']), "
-                "artifact-library-item:has(button[aria-description='Slide Deck'])"
-            )
-            if artifact_items.count():
-                artifact = artifact_items.last
-                more = artifact.locator(
-                    "button[aria-label='المزيد'], button[aria-label*='More']"
-                ).last
+            artifact = self.registry.find(page, ARTIFACT_ITEM)
+            if artifact is not None:
                 try:
-                    if more.count() and more.is_visible(timeout=500):
-                        more.click(force=True)
+                    more = self.registry.find(artifact.locator, ARTIFACT_MORE_BUTTON)
+                    if more is not None:
+                        more.locator.click(force=True)
                         page.wait_for_timeout(500)
-                        pdf_download = page.locator(
-                            "[role='menuitem']:has-text('تنزيل مستند PDF'), "
-                            "[role='menuitem']:has-text('Download PDF')"
-                        ).last
-                        if pdf_download.count() and pdf_download.is_visible(timeout=1000):
-                            path = self._save_download(page, pdf_download, target_dir)
+                        pdf_download = self.registry.find(page, ARTIFACT_DOWNLOAD_PDF)
+                        if pdf_download is not None:
+                            path = self._save_download(page, pdf_download.locator, target_dir)
                             if path:
                                 return path
                         page.keyboard.press("Escape")
@@ -545,27 +418,11 @@ class NotebookLMService:
                     page.keyboard.press("Escape")
 
             # Open the finished artifact card/viewer if it is ready.
-            self._click_first(
-                page,
-                (
-                    "button:has-text('Slide Deck'):not(:has-text('Generate'))",
-                    "[aria-label*='Open Slide Deck']",
-                    "button:has-text('عرض الشرائح')",
-                ),
-                timeout=500,
-            )
+            self._click_first(page, ARTIFACT_OPEN_CARD, timeout=500)
             page.wait_for_timeout(800)
 
-            for selector in (
-                "button[aria-label*='Download']",
-                "button[title*='Download']",
-                "a[download]",
-                "button:has-text('Download')",
-                "button[aria-label*='تنزيل']",
-                "button:has-text('تنزيل')",
-            ):
+            for _, control in self.registry.candidates(page, DOWNLOAD_CONTROL):
                 try:
-                    control = page.locator(selector).last
                     if control.count() and control.is_visible(timeout=500):
                         path = self._save_download(page, control, target_dir)
                         if path:
@@ -574,14 +431,9 @@ class NotebookLMService:
                     continue
 
             # Some NotebookLM builds place Download in an overflow menu.
-            if self._click_first(
-                page,
-                ("button[aria-label*='More']", "button[aria-label*='المزيد']"),
-                timeout=400,
-            ):
-                for selector in ("[role='menuitem']:has-text('Download')", "[role='menuitem']:has-text('تنزيل')"):
+            if self._click_first(page, OVERFLOW_MENU_BUTTON, timeout=400):
+                for _, item in self.registry.candidates(page, DOWNLOAD_MENU_ITEM):
                     try:
-                        item = page.locator(selector).last
                         if item.count() and item.is_visible(timeout=500):
                             path = self._save_download(page, item, target_dir)
                             if path:
@@ -593,22 +445,16 @@ class NotebookLMService:
             elapsed = time.monotonic() - started_at
             if elapsed >= next_progress_log:
                 try:
-                    body_text = page.locator("body").inner_text(timeout=5000)
+                    generating = self.registry.find(page, GENERATING_INDICATOR) is not None
                 except Exception:
-                    # NotebookLM can briefly replace the page body while an
-                    # artifact card is materializing. A status log must never
-                    # terminate an otherwise healthy generation poll.
-                    body_text = ""
-                state = (
-                    "generating"
-                    if "جارٍ إنشاء مجموعة الشرائح" in body_text
-                    or "Creating slide deck" in body_text
-                    else "waiting-for-artifact"
-                )
+                    # NotebookLM can briefly replace the page while an artifact
+                    # card is materializing. A status log must never terminate
+                    # an otherwise healthy generation poll.
+                    generating = False
                 logger.info(
                     "[Sard] NotebookLM slide deck still pending: elapsed=%.0fs state=%s timeout=%ss",
                     elapsed,
-                    state,
+                    "generating" if generating else "waiting-for-artifact",
                     settings.NOTEBOOKLM_TIMEOUT_SECONDS,
                 )
                 next_progress_log += 60.0
@@ -712,20 +558,8 @@ class NotebookLMService:
         download action appears. This intentionally includes the left-side source
         item menu shown in the screenshot, because that is the real menu that can
         expose the artifact download action in the current NotebookLM UI."""
-        selectors = (
-            "button.source-item-more-button",
-            "button.artifact-more-button",
-            "button[aria-label='المزيد']",
-            "button[aria-label*='More']",
-            "button[mattooltip='المزيد']",
-            "button[title='المزيد']",
-            "button:has(mat-icon:has-text('more_vert'))",
-            "mat-icon:has-text('more_vert')",
-        )
-
-        for selector in selectors:
+        for _, locators in self.registry.all_matches(page, HAMBURGER_BUTTON):
             try:
-                locators = page.locator(selector)
                 count = locators.count()
                 for i in range(count):
                     button = locators.nth(i)
@@ -746,21 +580,17 @@ class NotebookLMService:
                         button.evaluate("el => el.setAttribute('data-sard-clicked', '1')")
                     except Exception:
                         try:
-                            button.locator("xpath=ancestor::button[1]").first.click(force=True)
+                            owner = self.registry.find(button, HAMBURGER_OWNER_BUTTON)
+                            if owner is None:
+                                continue
+                            owner.locator.click(force=True)
                         except Exception:
                             continue
 
                     page.wait_for_timeout(400)
-                    menu_items = page.locator(
-                        "[role='menuitem']:has-text('تنزيل مستند PDF'), "
-                        "[role='menuitem']:has-text('Download PDF'), "
-                        "[role='menuitem']:has-text('Download'), "
-                        "[role='menuitem']:has-text('تنزيل')"
-                    )
-                    if menu_items.count():
-                        first_item = menu_items.first
-                        if first_item.is_visible(timeout=1500):
-                            return self._save_download(page, first_item, target_dir)
+                    download_item = self.registry.find(page, HAMBURGER_MENU_ITEM)
+                    if download_item is not None:
+                        return self._save_download(page, download_item.locator, target_dir)
 
                     try:
                         page.keyboard.press("Escape")
@@ -770,3 +600,4 @@ class NotebookLMService:
                 continue
 
         return None
+
