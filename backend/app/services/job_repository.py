@@ -1,6 +1,6 @@
 import logging
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from functools import wraps
 from typing import Any, Optional
 
@@ -27,6 +27,10 @@ RUNNING_STEP = "جارٍ أتمتة Google NotebookLM وإنشاء العرض ا
 
 class JobStoreUnavailable(RuntimeError):
     """MongoDB could not be reached. Jobs are never kept in memory instead."""
+
+
+class LeaseLost(RuntimeError):
+    """Another worker has taken this Job over. Whatever this worker was doing no longer counts."""
 
 
 def _now() -> datetime:
@@ -92,25 +96,79 @@ class JobRepository:
         return self.collection.find_one({"_id": job_id})
 
     @_guarded
-    def claim_next(self) -> Optional[dict[str, Any]]:
-        """Atomically take the oldest due queued Job and mark it running."""
+    def claim_next(self, worker_id: str = "", lease_seconds: Optional[float] = None) -> Optional[dict[str, Any]]:
+        """Atomically take the oldest due queued Job, or else a running Job whose lease ran out.
+
+        The Job is marked running and leased to `worker_id`. A Job taken over from a worker that
+        died comes back with `_recovered` set (that key is not stored).
+        """
         now = _now()
-        return self.collection.find_one_and_update(
+        lease = settings.JOB_LEASE_SECONDS if lease_seconds is None else lease_seconds
+        owner = {"state": RUNNING, "worker_id": worker_id, "lease_until": now + timedelta(seconds=lease), "updated_at": now}
+
+        job = self.collection.find_one_and_update(
             {"state": QUEUED, "run_after": {"$lte": now}},
             {
-                "$set": {"state": RUNNING, "progress": 25, "step": RUNNING_STEP, "started_at": now, "updated_at": now},
+                "$set": {**owner, "progress": 25, "step": RUNNING_STEP, "started_at": now},
                 "$inc": {"attempts": 1},
             },
             sort=[("created_at", ASCENDING)],
             return_document=ReturnDocument.AFTER,
         )
+        if job is not None:
+            return job
+
+        job = self.collection.find_one_and_update(
+            {"state": RUNNING, "lease_until": {"$lt": now}},
+            {"$set": owner, "$inc": {"attempts": 1, "takeovers": 1}},
+            sort=[("created_at", ASCENDING)],
+            return_document=ReturnDocument.AFTER,
+        )
+        if job is not None:
+            job["_recovered"] = True
+        return job
 
     @_guarded
-    def start_stage(self, job_id: str, stage: str, progress: int, step: str) -> int:
+    def heartbeat(self, job_id: str, worker_id: str, lease_seconds: Optional[float] = None) -> bool:
+        """Extend the lease. False means the Job is no longer ours."""
+        now = _now()
+        lease = settings.JOB_LEASE_SECONDS if lease_seconds is None else lease_seconds
+        result = self.collection.update_one(
+            {"_id": job_id, "state": RUNNING, "worker_id": worker_id},
+            {"$set": {"lease_until": now + timedelta(seconds=lease), "updated_at": now}},
+        )
+        return result.matched_count == 1
+
+    @_guarded
+    def release(self, job_id: str, worker_id: str) -> bool:
+        """Hand a Job back to the queue straight away, for example when this worker is shutting down."""
+        now = _now()
+        result = self.collection.update_one(
+            {"_id": job_id, "state": RUNNING, "worker_id": worker_id},
+            {"$set": {"state": QUEUED, "run_after": now, "step": WAITING_STEP, "updated_at": now}, "$unset": {"lease_until": ""}},
+        )
+        return result.matched_count == 1
+
+    def _write(self, job_id: str, update: dict[str, Any], worker_id: Optional[str]) -> None:
+        """Update a Job. With a worker_id the write only counts while that worker still holds the Job."""
+        query: dict[str, Any] = {"_id": job_id}
+        if worker_id is not None:
+            query.update({"state": RUNNING, "worker_id": worker_id})
+        result = self.collection.update_one(query, update)
+        if worker_id is not None and result.matched_count == 0:
+            raise LeaseLost(f"Job {job_id} is no longer held by worker {worker_id}")
+
+    @_guarded
+    def start_stage(
+        self, job_id: str, stage: str, progress: int, step: str, worker_id: Optional[str] = None
+    ) -> int:
         """Record that a Stage is starting. Returns how many attempts this Stage has now used."""
         now = _now()
+        query: dict[str, Any] = {"_id": job_id}
+        if worker_id is not None:
+            query.update({"state": RUNNING, "worker_id": worker_id})
         job = self.collection.find_one_and_update(
-            {"_id": job_id},
+            query,
             {
                 "$inc": {f"stages.{stage}.attempts": 1},
                 "$set": {
@@ -123,13 +181,18 @@ class JobRepository:
             },
             return_document=ReturnDocument.AFTER,
         )
+        if job is None:
+            raise LeaseLost(f"Job {job_id} is no longer held by worker {worker_id}")
         return job["stages"][stage]["attempts"]
 
     @_guarded
-    def save_stage_output(self, job_id: str, stage: str, output: dict[str, Any]) -> None:
-        self.collection.update_one(
-            {"_id": job_id},
+    def save_stage_output(
+        self, job_id: str, stage: str, output: dict[str, Any], worker_id: Optional[str] = None
+    ) -> None:
+        self._write(
+            job_id,
             {"$set": {f"stages.{stage}.state": "done", f"stages.{stage}.output": output, "updated_at": _now()}},
+            worker_id,
         )
 
     @staticmethod
@@ -145,10 +208,11 @@ class JobRepository:
         run_after: datetime,
         detail: str = "",
         evidence_dir: Optional[str] = None,
+        worker_id: Optional[str] = None,
     ) -> None:
         """Put the Job back in the queue to be tried again later, keeping every finished Stage."""
-        self.collection.update_one(
-            {"_id": job_id},
+        self._write(
+            job_id,
             {
                 "$set": {
                     "state": QUEUED,
@@ -158,31 +222,36 @@ class JobRepository:
                     f"stages.{stage}.state": "waiting",
                     "updated_at": _now(),
                 },
+                "$unset": {"lease_until": ""},
                 "$push": {"failures": self._evidence(stage, error, detail, evidence_dir)},
             },
+            worker_id,
         )
 
     @_guarded
-    def reset_stages(self, job_id: str, stages: list[str], expand: bool = False) -> None:
+    def reset_stages(
+        self, job_id: str, stages: list[str], expand: bool = False, worker_id: Optional[str] = None
+    ) -> None:
         """Forget the output of some Stages and queue the Job to run again straight away."""
         now = _now()
         update: dict[str, Any] = {
             "$set": {"state": QUEUED, "run_after": now, "step": WAITING_STEP, "updated_at": now},
-            "$unset": {f"stages.{stage}": "" for stage in stages},
+            "$unset": {**{f"stages.{stage}": "" for stage in stages}, "lease_until": ""},
         }
         if expand:
             update["$inc"] = {"expansions": 1}
-        self.collection.update_one({"_id": job_id}, update)
+        self._write(job_id, update, worker_id)
 
     @_guarded
-    def complete(self, job_id: str, result: dict[str, Any]) -> None:
+    def complete(self, job_id: str, result: dict[str, Any], worker_id: Optional[str] = None) -> None:
         now = _now()
-        self.collection.update_one(
-            {"_id": job_id},
+        self._write(
+            job_id,
             {
                 "$set": {"state": COMPLETED, "progress": 100, "result": result, "finished_at": now, "updated_at": now},
-                "$unset": {"error": ""},
+                "$unset": {"error": "", "lease_until": ""},
             },
+            worker_id,
         )
 
     def _finish(
@@ -193,12 +262,16 @@ class JobRepository:
         stage: Optional[str],
         detail: str,
         evidence_dir: Optional[str],
+        worker_id: Optional[str],
     ) -> None:
         now = _now()
-        update: dict[str, Any] = {"$set": {"state": state, "error": error, "finished_at": now, "updated_at": now}}
+        update: dict[str, Any] = {
+            "$set": {"state": state, "error": error, "finished_at": now, "updated_at": now},
+            "$unset": {"lease_until": ""},
+        }
         if stage:
             update["$push"] = {"failures": self._evidence(stage, error, detail, evidence_dir)}
-        self.collection.update_one({"_id": job_id}, update)
+        self._write(job_id, update, worker_id)
 
     @_guarded
     def fail(
@@ -208,9 +281,10 @@ class JobRepository:
         stage: Optional[str] = None,
         detail: str = "",
         evidence_dir: Optional[str] = None,
+        worker_id: Optional[str] = None,
     ) -> None:
         """The Job failed in a way that retrying cannot fix."""
-        self._finish(FAILED, job_id, error, stage, detail, evidence_dir)
+        self._finish(FAILED, job_id, error, stage, detail, evidence_dir, worker_id)
 
     @_guarded
     def dead_letter(
@@ -220,9 +294,10 @@ class JobRepository:
         stage: str,
         detail: str = "",
         evidence_dir: Optional[str] = None,
+        worker_id: Optional[str] = None,
     ) -> None:
         """The Job used every attempt on a Stage. It is kept, with its error and evidence."""
-        self._finish(DEAD_LETTER, job_id, error, stage, detail, evidence_dir)
+        self._finish(DEAD_LETTER, job_id, error, stage, detail, evidence_dir, worker_id)
 
     @_guarded
     def requeue(self, job_id: str) -> bool:
@@ -233,7 +308,7 @@ class JobRepository:
         now = _now()
         update: dict[str, Any] = {
             "$set": {"state": QUEUED, "run_after": now, "step": WAITING_STEP, "updated_at": now},
-            "$unset": {"error": "", "finished_at": ""},
+            "$unset": {"error": "", "finished_at": "", "lease_until": ""},
         }
         failed_stage = job.get("stage")
         if failed_stage:

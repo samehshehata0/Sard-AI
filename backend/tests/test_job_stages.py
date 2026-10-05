@@ -112,9 +112,9 @@ def test_progress_and_step_follow_the_stage_that_is_running(repository):
     stages = FakeStages()
     original = repository.start_stage
 
-    def spy(job_id, stage, progress, step):
+    def spy(job_id, stage, progress, step, **kwargs):
         seen.append((stage, progress, step))
-        return original(job_id, stage, progress, step)
+        return original(job_id, stage, progress, step, **kwargs)
 
     repository.start_stage = spy
     enqueue(repository)
