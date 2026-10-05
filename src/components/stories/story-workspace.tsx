@@ -12,6 +12,7 @@ type WorkspaceView = "storyboard" | "audio" | "video";
 type WorkspaceStory = {
   _id: string;
   status: "queued" | "generating" | "completed" | "failed";
+  blockedReason?: "needs_login" | "quota_exhausted";
   progress: number;
   currentStep: string;
   error?: string;
@@ -41,8 +42,10 @@ const copy: Record<WorkspaceView, { pageTitle: string; title: string; subtitle: 
   },
 };
 
-function statusLabel(status: WorkspaceStory["status"]) {
-  return ({ queued: "في قائمة الانتظار", generating: "جارٍ التوليد", completed: "اكتمل", failed: "توقف بسبب خطأ" })[status];
+function statusLabel(story: Pick<WorkspaceStory, "status" | "blockedReason">) {
+  if (story.blockedReason === "needs_login") return "بانتظار تسجيل الدخول";
+  if (story.blockedReason === "quota_exhausted") return "بانتظار تجدد الحصة اليومية";
+  return ({ queued: "في قائمة الانتظار", generating: "جارٍ التوليد", completed: "اكتمل", failed: "توقف بسبب خطأ" })[story.status];
 }
 
 export function StoryWorkspace({ storyId, view }: { storyId: string; view: WorkspaceView }) {
@@ -161,7 +164,7 @@ function GenerationStatus({ story, onRetry, isRetrying, onCancel, isCancelling }
             <p className={isFailed ? "mt-1 text-sm font-bold text-destructive" : "mt-1 text-sm font-bold text-muted-foreground"}>{isFailed ? story.error : story.currentStep}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3"><span className={`rounded-full px-4 py-2 text-sm font-bold ${isFailed ? "bg-destructive/10 text-destructive" : complete ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{statusLabel(story.status)} · {story.progress}%</span>{story.status === "queued" ? <ArabicButton type="button" variant="outline" disabled={isCancelling} onClick={onCancel} icon={<XCircle className="h-4 w-4" />}>{isCancelling ? "جارٍ الإلغاء…" : "إلغاء الطلب"}</ArabicButton> : null}{isFailed ? <ArabicButton type="button" variant="outline" disabled={isRetrying} onClick={onRetry} icon={<RefreshCw className={`h-4 w-4 ${isRetrying ? "animate-spin" : ""}`} />}>{isRetrying ? "جارٍ إعادة المحاولة…" : "إعادة المحاولة"}</ArabicButton> : null}</div>
+        <div className="flex items-center gap-3"><span className={`rounded-full px-4 py-2 text-sm font-bold ${isFailed ? "bg-destructive/10 text-destructive" : complete ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{statusLabel(story)} · {story.progress}%</span>{story.status === "queued" ? <ArabicButton type="button" variant="outline" disabled={isCancelling} onClick={onCancel} icon={<XCircle className="h-4 w-4" />}>{isCancelling ? "جارٍ الإلغاء…" : "إلغاء الطلب"}</ArabicButton> : null}{isFailed ? <ArabicButton type="button" variant="outline" disabled={isRetrying} onClick={onRetry} icon={<RefreshCw className={`h-4 w-4 ${isRetrying ? "animate-spin" : ""}`} />}>{isRetrying ? "جارٍ إعادة المحاولة…" : "إعادة المحاولة"}</ArabicButton> : null}</div>
       </div>
       <div className="mt-5 h-3 overflow-hidden rounded-full bg-muted" aria-label={`التقدم ${story.progress}%`}>
         <div className={isFailed ? "h-full bg-destructive transition-all duration-500" : "h-full bg-gradient-to-l from-primary to-secondary transition-all duration-500"} style={{ width: `${story.progress}%` }} />

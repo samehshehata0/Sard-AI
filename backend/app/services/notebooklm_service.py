@@ -4,6 +4,7 @@ import logging
 import os
 import time
 from contextlib import contextmanager
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -63,6 +64,31 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
+def storage_state_candidates() -> list[str]:
+    return [
+        os.path.abspath(path)
+        for path in (
+            settings.NOTEBOOKLM_STORAGE_STATE_PATH,
+            os.path.join(os.path.dirname(__file__), "..", "..", "storage_state.json"),
+            os.path.join(os.getcwd(), "backend", "storage_state.json"),
+            os.path.join(os.getcwd(), "storage_state.json"),
+        )
+    ]
+
+
+def session_file_modified_at() -> Optional[datetime]:
+    """When the saved NotebookLM login was last written (`npm run auth`), or None if there is none.
+
+    Only looks at the files; unlike `_storage_state_path` it never tries to log in.
+    """
+    times = [
+        os.path.getmtime(path)
+        for path in storage_state_candidates()
+        if os.path.isfile(path) and os.path.getsize(path) > 10
+    ]
+    return datetime.fromtimestamp(max(times), tz=timezone.utc) if times else None
+
+
 class NotebookLMService:
     def __init__(self):
         self.browser: Optional[Browser] = None
@@ -72,14 +98,7 @@ class NotebookLMService:
         self.pacer = HumanPacer.from_settings(settings)
 
     def _storage_state_path(self) -> Optional[str]:
-        possible_paths = [
-            settings.NOTEBOOKLM_STORAGE_STATE_PATH,
-            os.path.join(os.path.dirname(__file__), "..", "..", "storage_state.json"),
-            os.path.join(os.getcwd(), "backend", "storage_state.json"),
-            os.path.join(os.getcwd(), "storage_state.json"),
-        ]
-        for candidate in possible_paths:
-            path = os.path.abspath(candidate)
+        for path in storage_state_candidates():
             if os.path.isfile(path) and os.path.getsize(path) > 10:
                 return path
 

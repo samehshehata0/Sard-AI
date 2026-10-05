@@ -27,7 +27,15 @@ export async function listStoriesForUser(userId: string) {
 export async function updateStoryProgress(id: string, progress: number, currentStep: string) {
   await (await storiesCollection()).updateOne(
     { _id: id },
-    { $set: { status: "generating", progress, currentStep, updatedAt: new Date() } },
+    { $set: { status: "generating", progress, currentStep, updatedAt: new Date() }, $unset: { blockedReason: "" } },
+  );
+}
+
+/** The story is waiting for a login or for the daily quota, not failing: it resumes by itself. */
+export async function markStoryBlocked(id: string, reason: NonNullable<StoryDocument["blockedReason"]>, currentStep: string) {
+  await (await storiesCollection()).updateOne(
+    { _id: id },
+    { $set: { status: "queued", blockedReason: reason, currentStep, updatedAt: new Date() } },
   );
 }
 
@@ -118,6 +126,7 @@ export async function completeStory(id: string, assets: StoryDocument["assets"])
         completedAt: new Date(),
         updatedAt: new Date(),
       },
+      $unset: { blockedReason: "" },
     },
   );
 }
@@ -125,7 +134,10 @@ export async function completeStory(id: string, assets: StoryDocument["assets"])
 export async function failStory(id: string, error: string) {
   await (await storiesCollection()).updateOne(
     { _id: id },
-    { $set: { status: "failed", error, currentStep: "توقف التوليد بسبب خطأ.", updatedAt: new Date() } },
+    {
+      $set: { status: "failed", error, currentStep: "توقف التوليد بسبب خطأ.", updatedAt: new Date() },
+      $unset: { blockedReason: "" },
+    },
   );
 }
 
@@ -140,7 +152,7 @@ export async function resetStoryForRetry(id: string, userId: string, jobId?: str
         updatedAt: new Date(),
         ...(jobId ? { jobId } : {}),
       },
-      $unset: { error: "" },
+      $unset: { error: "", blockedReason: "" },
     },
   );
   return result.modifiedCount === 1;

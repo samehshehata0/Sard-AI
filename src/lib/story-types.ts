@@ -55,6 +55,8 @@ export type StoryDocument = {
   status: "queued" | "generating" | "completed" | "failed";
   // The generation Job that is producing this story (see docs/adr/0001).
   jobId?: string;
+  // Set while the story waits for something outside the job's control, instead of failing.
+  blockedReason?: "needs_login" | "quota_exhausted";
   progress: number;
   currentStep: string;
   error?: string;

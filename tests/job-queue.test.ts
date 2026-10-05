@@ -5,6 +5,7 @@ vi.mock("@/lib/story-repository", () => ({
   completeStory: vi.fn(),
   failStory: vi.fn(),
   getStoryForUser: vi.fn(),
+  markStoryBlocked: vi.fn(),
   saveGeneratedScript: vi.fn(),
   updateStoryProgress: vi.fn(),
 }));
@@ -13,6 +14,7 @@ import {
   completeStory,
   failStory,
   getStoryForUser,
+  markStoryBlocked,
   saveGeneratedScript,
   updateStoryProgress,
 } from "@/lib/story-repository";
@@ -252,6 +254,35 @@ describe("syncStoryWithJob", () => {
     await syncStoryWithJob(story({ status: "generating" }), "u1");
     expect(failStory).toHaveBeenCalledWith("s1", "تعذر إنشاء العرض التعليمي");
     expect(completeStory).not.toHaveBeenCalled();
+  });
+
+  it("shows a job waiting for a NotebookLM login as blocked, not failed", async () => {
+    fetchMock.mockResolvedValue(
+      jsonResponse({ job_id: "j1", state: "needs_login", step: "بانتظار تسجيل الدخول إلى NotebookLM. سيُستأنف التوليد تلقائيًا بعد تجديد الجلسة." }),
+    );
+    await syncStoryWithJob(story({ status: "generating" }), "u1");
+    expect(markStoryBlocked).toHaveBeenCalledWith("s1", "needs_login", expect.stringContaining("تسجيل الدخول"));
+    expect(failStory).not.toHaveBeenCalled();
+  });
+
+  it("shows a job waiting for the daily quota as blocked, with its own Arabic message", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "quota_exhausted" }));
+    await syncStoryWithJob(story({ status: "queued" }), "u1");
+    expect(markStoryBlocked).toHaveBeenCalledWith("s1", "quota_exhausted", expect.stringContaining("الحد اليومي"));
+    expect(failStory).not.toHaveBeenCalled();
+  });
+
+  it("does not rewrite a story that already shows why it is blocked", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "needs_login" }));
+    const blocked = story({ status: "queued", blockedReason: "needs_login" });
+    expect(await syncStoryWithJob(blocked, "u1")).toBe(blocked);
+    expect(markStoryBlocked).not.toHaveBeenCalled();
+  });
+
+  it("moves the story on once the parked job runs again", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "running", progress: 25, step: "جارٍ أتمتة NotebookLM" }));
+    await syncStoryWithJob(story({ status: "queued", blockedReason: "needs_login" }), "u1");
+    expect(updateStoryProgress).toHaveBeenCalledWith("s1", 25, "جارٍ أتمتة NotebookLM"); // which also clears the blocked reason
   });
 
   it("treats a cancelled job as a stopped story", async () => {
