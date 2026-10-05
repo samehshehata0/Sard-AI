@@ -53,6 +53,8 @@ export type StoryDocument = {
   userId: string;
   input: StoryInput;
   status: "queued" | "generating" | "completed" | "failed";
+  // The generation Job that is producing this story (see docs/adr/0001).
+  jobId?: string;
   progress: number;
   currentStep: string;
   error?: string;

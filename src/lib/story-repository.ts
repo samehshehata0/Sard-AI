@@ -16,7 +16,7 @@ export async function listStoriesForUser(userId: string) {
   try {
     return await (await storiesCollection()).find(
       { userId },
-      { projection: { _id: 1, status: 1, progress: 1, currentStep: 1, error: 1, input: 1, sceneCount: 1, createdAt: 1, updatedAt: 1 } },
+      { projection: { _id: 1, jobId: 1, status: 1, progress: 1, currentStep: 1, error: 1, input: 1, sceneCount: 1, createdAt: 1, updatedAt: 1 } },
     ).sort({ createdAt: -1 }).toArray();
   } catch (err) {
     console.warn("[Sard] MongoDB listStoriesForUser notice, returning empty list:", err);
@@ -129,22 +129,36 @@ export async function failStory(id: string, error: string) {
   );
 }
 
-export async function resetStoryForRetry(id: string, userId: string) {
+export async function resetStoryForRetry(id: string, userId: string, jobId?: string) {
   const result = await (await storiesCollection()).updateOne(
     { _id: id, userId, status: "failed" },
     {
-      $set: { status: "queued", progress: 0, currentStep: "أُعيدت محاولة التوليد من آخر مرحلة مكتملة.", updatedAt: new Date() },
+      $set: {
+        status: "queued",
+        progress: 0,
+        currentStep: "أُعيدت محاولة التوليد من آخر مرحلة مكتملة.",
+        updatedAt: new Date(),
+        ...(jobId ? { jobId } : {}),
+      },
       $unset: { error: "" },
     },
   );
   return result.modifiedCount === 1;
 }
 
-export function createQueuedStory(id: string, userId: string, input: StoryInput, totalDurationSeconds: number, sceneCount: number): StoryDocument {
+export function createQueuedStory(
+  id: string,
+  userId: string,
+  input: StoryInput,
+  totalDurationSeconds: number,
+  sceneCount: number,
+  jobId?: string,
+): StoryDocument {
   const now = new Date();
   return {
     _id: id,
     userId,
+    ...(jobId ? { jobId } : {}),
     input,
     status: "queued",
     progress: 0,

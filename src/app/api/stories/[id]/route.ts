@@ -1,11 +1,11 @@
 import { getStoryForUser } from "@/lib/story-repository";
+import { syncStoryWithJob } from "@/lib/services/job-queue";
 import { requireStoryUserId } from "@/lib/story-auth";
 import { apiSuccess } from "@/server/responses/api-response";
 import { handleApiError } from "@/server/errors/error-handler";
 import { AppError } from "@/server/errors/app-error";
 
 export const runtime = "nodejs";
-export const maxDuration = 900;
 export const dynamic = "force-dynamic";
 
 function sanitizeUrl(url?: string): string | undefined {
@@ -25,8 +25,10 @@ export async function GET(request: Request, context: { params: Promise<{ id: str
   try {
     const userId = await requireStoryUserId();
 
-    const story = await getStoryForUser(id, userId);
-    if (!story) throw AppError.notFound("القصة غير موجودة أو لا تملك صلاحية الوصول إليها.");
+    const found = await getStoryForUser(id, userId);
+    if (!found) throw AppError.notFound("القصة غير موجودة أو لا تملك صلاحية الوصول إليها.");
+    // A story still waiting on its generation Job is brought up to date first.
+    const story = await syncStoryWithJob(found, userId);
 
     // Sanitize any file:// URLs to HTTP static URLs
     if (story.assets) {
