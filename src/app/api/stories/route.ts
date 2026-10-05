@@ -1,12 +1,7 @@
 import { randomUUID } from "node:crypto";
-import {
-  createQueuedStory,
-  createStory,
-  failStory,
-  listStoriesForUser,
-} from "@/lib/story-repository";
+import { createQueuedStory, createStory, listStoriesForUser } from "@/lib/story-repository";
 import { requireStoryUserId } from "@/lib/story-auth";
-import { enqueueStoryJob, isAwaitingJob, syncStoryWithJob } from "@/lib/services/job-queue";
+import { cancelStoryJob, enqueueStoryJob, isAwaitingJob, syncStoryWithJob } from "@/lib/services/job-queue";
 import { assertSameOrigin } from "@/server/security/request-origin";
 import { apiSuccess } from "@/server/responses/api-response";
 import { handleApiError } from "@/server/errors/error-handler";
@@ -81,20 +76,23 @@ export async function POST(request: Request) {
       custom_instructions: body.custom_instructions || "",
     };
 
+    // The queue decides first: it refuses a user with too many active Jobs, and recognises a request
+    // that is already queued or running. Only a Job it accepted gets a story.
+    const outcome = await enqueueStoryJob(storyId, jobId, userId, inputData);
+    if (outcome.duplicate) {
+      return apiSuccess(
+        { storyId: outcome.storyId, status: "queued", sceneCount: 1, duplicate: true },
+        "هذا الطلب قيد المعالجة بالفعل.",
+      );
+    }
+
     try {
       await createStory(createQueuedStory(storyId, userId, inputData, 60, 1, jobId));
     } catch (err) {
       console.error("[Sard] Could not save the story:", err);
+      // The Job was queued for a story that does not exist: take it back out.
+      await cancelStoryJob(jobId, userId).catch(() => {});
       throw AppError.databaseUnavailable();
-    }
-
-    // The Job is queued and this request returns; the Python worker does the rest.
-    try {
-      await enqueueStoryJob(storyId, jobId, inputData);
-    } catch (err) {
-      const message = err instanceof AppError ? err.message : "تعذر إضافة طلب التوليد إلى قائمة الانتظار.";
-      await failStory(storyId, message).catch(() => {});
-      throw err;
     }
 
     return apiSuccess({ storyId, status: "queued", sceneCount: 1 }, "تم إنشاء طلب التوليد بنجاح.", { status: 202 });

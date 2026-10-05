@@ -3,6 +3,7 @@ import { AppError } from "@/server/errors/app-error";
 
 vi.mock("@/lib/services/job-queue", () => ({
   enqueueStoryJob: vi.fn(),
+  cancelStoryJob: vi.fn(),
   syncStoryWithJob: vi.fn(async (story: unknown) => story),
   isAwaitingJob: vi.fn(),
 }));
@@ -28,10 +29,11 @@ import {
   resetStoryForRetry,
   failStory,
 } from "@/lib/story-repository";
-import { enqueueStoryJob, isAwaitingJob, syncStoryWithJob } from "@/lib/services/job-queue";
+import { cancelStoryJob, enqueueStoryJob, isAwaitingJob, syncStoryWithJob } from "@/lib/services/job-queue";
 import { GET as listStories, POST as createStoryRoute } from "@/app/api/stories/route";
 import { GET as getStory } from "@/app/api/stories/[id]/route";
 import { POST as retryStory } from "@/app/api/stories/[id]/retry/route";
+import { POST as cancelStory } from "@/app/api/stories/[id]/cancel/route";
 import { POST as rebuildVideo } from "@/app/api/stories/[id]/video/rebuild/route";
 
 const mockedRequireUser = vi.mocked(requireUser);
@@ -42,6 +44,8 @@ const mockedCreateQueuedStory = vi.mocked(createQueuedStory);
 const mockedResetStoryForRetry = vi.mocked(resetStoryForRetry);
 const mockedFailStory = vi.mocked(failStory);
 const mockedEnqueue = vi.mocked(enqueueStoryJob);
+const mockedCancelJob = vi.mocked(cancelStoryJob);
+const accepted = { duplicate: false, storyId: "s1" };
 const mockedSync = vi.mocked(syncStoryWithJob);
 const mockedIsAwaitingJob = vi.mocked(isAwaitingJob);
 
@@ -77,6 +81,9 @@ describe("story route handlers", () => {
     vi.clearAllMocks();
     mockedSync.mockImplementation(async (story) => story);
     mockedFailStory.mockResolvedValue(undefined);
+    mockedCancelJob.mockResolvedValue(undefined);
+    mockedCreateStory.mockResolvedValue(undefined);
+    mockedEnqueue.mockResolvedValue(accepted);
   });
 
   describe("GET /api/stories", () => {
@@ -137,7 +144,6 @@ describe("story route handlers", () => {
     it("creates a story scoped to the session user and queues a job, with no cookie minted", async () => {
       mockedRequireUser.mockResolvedValue(user);
       mockedCreateQueuedStory.mockReturnValue({ _id: "s1", userId: user.id } as never);
-      mockedEnqueue.mockResolvedValue(undefined);
       const response = await createStoryRoute(postRequest("http://localhost/api/stories", { title: "قصة تعليمية" }));
       const body = await response.json();
       expect(response.status).toBe(202);
@@ -154,37 +160,58 @@ describe("story route handlers", () => {
       expect(mockedCreateStory).toHaveBeenCalledWith({ _id: "s1", userId: user.id });
     });
 
-    it("returns as soon as the job is queued, handing the same story and job ids to the queue", async () => {
+    it("asks the queue first, for this user, handing it the same story and job ids", async () => {
       mockedRequireUser.mockResolvedValue(user);
       mockedCreateQueuedStory.mockReturnValue({ _id: "s1", userId: user.id } as never);
-      mockedEnqueue.mockResolvedValue(undefined);
       const response = await createStoryRoute(postRequest("http://localhost/api/stories", { title: "قصة تعليمية" }));
       const body = await response.json();
-      const [storyId, jobId, input] = mockedEnqueue.mock.calls[0];
+      const [storyId, jobId, userId, input] = mockedEnqueue.mock.calls[0];
       expect(storyId).toBe(body.data.storyId);
+      expect(userId).toBe(user.id);
       expect(mockedCreateQueuedStory.mock.calls[0][5]).toBe(jobId);
       expect(input.title).toBe("قصة تعليمية");
-      expect(mockedFailStory).not.toHaveBeenCalled();
+      expect(mockedEnqueue.mock.invocationCallOrder[0]).toBeLessThan(mockedCreateStory.mock.invocationCallOrder[0]);
     });
 
-    it("refuses with 503 and marks the story failed when the queue cannot take the job", async () => {
+    it("answers with the existing story, and creates none, when the same request is already queued", async () => {
       mockedRequireUser.mockResolvedValue(user);
-      mockedCreateQueuedStory.mockReturnValue({ _id: "s1", userId: user.id } as never);
+      mockedEnqueue.mockResolvedValue({ duplicate: true, storyId: "existing-story" });
+      const response = await createStoryRoute(postRequest("http://localhost/api/stories", { title: "قصة" }));
+      const body = await response.json();
+      expect(response.status).toBe(200);
+      expect(body.data).toMatchObject({ storyId: "existing-story", duplicate: true });
+      expect(mockedCreateStory).not.toHaveBeenCalled();
+    });
+
+    it("answers 429 with the queue's message when the user has too many active jobs, and creates no story", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      mockedEnqueue.mockRejectedValue(AppError.rateLimited("وصلت إلى الحد الأقصى للطلبات قيد المعالجة (2)."));
+      const response = await createStoryRoute(postRequest("http://localhost/api/stories", { title: "قصة" }));
+      const body = await response.json();
+      expect(response.status).toBe(429);
+      expect(body.error.message).toBe("وصلت إلى الحد الأقصى للطلبات قيد المعالجة (2).");
+      expect(mockedCreateStory).not.toHaveBeenCalled();
+    });
+
+    it("refuses with 503 and creates no story when the queue cannot take the job", async () => {
+      mockedRequireUser.mockResolvedValue(user);
       mockedEnqueue.mockRejectedValue(AppError.databaseUnavailable("قائمة الانتظار غير متاحة مؤقتًا."));
       const response = await createStoryRoute(postRequest("http://localhost/api/stories", { title: "قصة" }));
       const body = await response.json();
       expect(response.status).toBe(503);
       expect(body.error.message).toBe("قائمة الانتظار غير متاحة مؤقتًا.");
-      expect(mockedFailStory).toHaveBeenCalledWith(expect.any(String), "قائمة الانتظار غير متاحة مؤقتًا.");
+      expect(mockedCreateStory).not.toHaveBeenCalled();
+      expect(mockedFailStory).not.toHaveBeenCalled();
     });
 
-    it("does not queue a job for a story that could not be saved", async () => {
+    it("takes the job back out of the queue when the story could not be saved", async () => {
       mockedRequireUser.mockResolvedValue(user);
       mockedCreateQueuedStory.mockReturnValue({ _id: "s1" } as never);
       mockedCreateStory.mockRejectedValue(new Error("mongo down"));
       const response = await createStoryRoute(postRequest("http://localhost/api/stories", { title: "قصة" }));
       expect(response.status).toBe(503);
-      expect(mockedEnqueue).not.toHaveBeenCalled();
+      const [, jobId, userId] = mockedEnqueue.mock.calls[0];
+      expect(mockedCancelJob).toHaveBeenCalledWith(jobId, userId);
     });
   });
 
@@ -254,7 +281,7 @@ describe("story route handlers", () => {
       mockedRequireUser.mockResolvedValue(user);
       mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status: "failed", input: {} } as never);
       mockedResetStoryForRetry.mockResolvedValue(true);
-      mockedEnqueue.mockResolvedValue(undefined);
+      mockedEnqueue.mockResolvedValue(accepted);
       const response = await retryStory(postRequest("http://localhost/api/stories/s1/retry"), params("s1"));
       const body = await response.json();
       expect(response.status).toBe(202);
@@ -266,11 +293,31 @@ describe("story route handlers", () => {
       mockedRequireUser.mockResolvedValue(user);
       mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status: "failed", input: { title: "قصة" } } as never);
       mockedResetStoryForRetry.mockResolvedValue(true);
-      mockedEnqueue.mockResolvedValue(undefined);
+      mockedEnqueue.mockResolvedValue(accepted);
       await retryStory(postRequest("http://localhost/api/stories/s1/retry"), params("s1"));
       const [, , jobId] = mockedResetStoryForRetry.mock.calls[0];
       expect(mockedResetStoryForRetry).toHaveBeenCalledWith("s1", user.id, expect.any(String));
-      expect(mockedEnqueue).toHaveBeenCalledWith("s1", jobId, { title: "قصة" });
+      expect(mockedEnqueue).toHaveBeenCalledWith("s1", jobId, user.id, { title: "قصة" });
+    });
+
+    it("answers 429 and stops the story again when the user is over their limit", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status: "failed", input: {} } as never);
+      mockedResetStoryForRetry.mockResolvedValue(true);
+      mockedEnqueue.mockRejectedValue(AppError.rateLimited("وصلت إلى الحد الأقصى للطلبات قيد المعالجة (2)."));
+      const response = await retryStory(postRequest("http://localhost/api/stories/s1/retry"), params("s1"));
+      expect(response.status).toBe(429);
+      expect(mockedFailStory).toHaveBeenCalledWith("s1", "وصلت إلى الحد الأقصى للطلبات قيد المعالجة (2).");
+    });
+
+    it("answers 409 when an identical request is already queued", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status: "failed", input: {} } as never);
+      mockedResetStoryForRetry.mockResolvedValue(true);
+      mockedEnqueue.mockResolvedValue({ duplicate: true, storyId: "other" });
+      const response = await retryStory(postRequest("http://localhost/api/stories/s1/retry"), params("s1"));
+      expect(response.status).toBe(409);
+      expect(mockedFailStory).toHaveBeenCalledWith("s1", "يوجد طلب مطابق قيد المعالجة بالفعل.");
     });
 
     it("fails the story again and answers 503 when the retry cannot be queued", async () => {
@@ -281,6 +328,59 @@ describe("story route handlers", () => {
       const response = await retryStory(postRequest("http://localhost/api/stories/s1/retry"), params("s1"));
       expect(response.status).toBe(503);
       expect(mockedFailStory).toHaveBeenCalledWith("s1", "قائمة الانتظار غير متاحة مؤقتًا.");
+    });
+  });
+
+  describe("POST /api/stories/[id]/cancel", () => {
+    it("rejects unauthenticated requests", async () => {
+      mockedRequireUser.mockRejectedValue(AppError.authentication());
+      const response = await cancelStory(postRequest("http://localhost/api/stories/s1/cancel"), params("s1"));
+      expect(response.status).toBe(401);
+    });
+
+    it("rejects cross-origin requests", async () => {
+      const response = await cancelStory(postRequest("http://localhost/api/stories/s1/cancel", undefined, "http://evil.example"), params("s1"));
+      expect(response.status).toBe(403);
+    });
+
+    it("returns 404 when the story isn't owned by the session user", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      mockedGetStoryForUser.mockResolvedValue(null);
+      const response = await cancelStory(postRequest("http://localhost/api/stories/s1/cancel"), params("s1"));
+      expect(response.status).toBe(404);
+      expect(mockedCancelJob).not.toHaveBeenCalled();
+    });
+
+    it("cancels a queued story's job for the session user and stops the story", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status: "queued", jobId: "j1" } as never);
+      const response = await cancelStory(postRequest("http://localhost/api/stories/s1/cancel"), params("s1"));
+      const body = await response.json();
+      expect(response.status).toBe(200);
+      expect(body.data.status).toBe("cancelled");
+      expect(mockedCancelJob).toHaveBeenCalledWith("j1", user.id);
+      expect(mockedFailStory).toHaveBeenCalledWith("s1", "أُلغي طلب التوليد.");
+    });
+
+    it("leaves the story alone when the queue says the job is already running", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status: "generating", jobId: "j1" } as never);
+      mockedCancelJob.mockRejectedValue(AppError.conflict("لا يمكن إلغاء مهمة قيد التنفيذ."));
+      const response = await cancelStory(postRequest("http://localhost/api/stories/s1/cancel"), params("s1"));
+      const body = await response.json();
+      expect(response.status).toBe(409);
+      expect(body.error.message).toBe("لا يمكن إلغاء مهمة قيد التنفيذ.");
+      expect(mockedFailStory).not.toHaveBeenCalled();
+    });
+
+    it("refuses a story that already finished, without asking the queue", async () => {
+      mockedRequireUser.mockResolvedValue(user);
+      for (const status of ["completed", "failed"]) {
+        mockedGetStoryForUser.mockResolvedValue({ _id: "s1", status, jobId: "j1" } as never);
+        const response = await cancelStory(postRequest("http://localhost/api/stories/s1/cancel"), params("s1"));
+        expect(response.status).toBe(409);
+      }
+      expect(mockedCancelJob).not.toHaveBeenCalled();
     });
   });
 
