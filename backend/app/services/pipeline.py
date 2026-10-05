@@ -7,8 +7,11 @@ before it are never repeated: a narration failure no longer costs another
 20-minute NotebookLM run.
 
 The stages are:
-    notebooklm      NotebookLM builds the slide deck (Submit and Collect are
-                    split into two Stages in a later step)
+    notebooklm_submit   a browser creates a notebook, adds the story and asks for
+                        the Slide Deck; the notebook's URL is saved on the Job
+                        as soon as the notebook exists
+    notebooklm_collect  a browser opens that notebook, waits for the deck,
+                        downloads it, then deletes the notebook
     extract_slides  deck -> one image and one text per slide
     narrate         one narration audio file per slide
     compose         combined audio, and video unless audio-only
@@ -70,6 +73,10 @@ class PipelineContext:
     outputs: dict[str, dict[str, Any]] = field(default_factory=dict)
     # How many times the deck was asked for again because it came back too short.
     expansions: int = 0
+    # Progress a Stage saved before it finished, from an earlier try (for example the notebook URL).
+    partial: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Saves progress on the Job. Called from the Stage, possibly from a worker thread.
+    save_partial: Optional[Callable[[str, dict[str, Any]], None]] = None
 
     @property
     def expansion_retry(self) -> bool:
@@ -92,6 +99,8 @@ class StageSpec:
     step: str
     # Can a stored output still be used (are the files it points at still there)?
     is_valid: Callable[[PipelineContext, dict[str, Any]], bool] = lambda ctx, output: True
+    # Opens a NotebookLM browser, so the number running at once is capped.
+    uses_browser: bool = False
 
 
 def arabic_failure(exc: Exception) -> str:
@@ -153,20 +162,40 @@ def rebuild_slides(ctx: PipelineContext) -> list[VideoSlide]:
 # --- stages ----------------------------------------------------------------
 
 
-async def run_notebooklm(ctx: PipelineContext) -> dict[str, Any]:
+def _attempt_dir(ctx: PipelineContext) -> str:
+    return os.path.join(ctx.work_dir, f"notebooklm_attempt_{ctx.attempt_number}")
+
+
+async def run_notebooklm_submit(ctx: PipelineContext) -> dict[str, Any]:
     os.makedirs(ctx.work_dir, exist_ok=True)
     story_md_path = os.path.join(ctx.work_dir, "story.md")
     Path(story_md_path).write_text(prompt_builder.build_story_markdown(ctx.request), encoding="utf-8")
-
-    # Retries inside one attempt share a folder, so a half-finished notebook is resumed, not recreated.
-    attempt_dir = os.path.join(ctx.work_dir, f"notebooklm_attempt_{ctx.attempt_number}")
     prompt = prompt_builder.build_notebooklm_prompt(ctx.request, expansion_retry=ctx.expansion_retry)
-    presentation_path = await NotebookLMService().run_pipeline(story_md_path, prompt, attempt_dir)
-    return {"presentation_path": presentation_path}
+
+    def remember_notebook(url: str) -> None:
+        # Saved the moment the notebook exists: a retry then carries on in it instead of making another.
+        if ctx.save_partial is not None:
+            ctx.save_partial("notebooklm_submit", {"notebook_url": url})
+
+    known_url = ctx.partial.get("notebooklm_submit", {}).get("notebook_url")
+    notebook_url = await NotebookLMService().submit(
+        story_md_path,
+        prompt,
+        _attempt_dir(ctx),
+        notebook_url=known_url,
+        on_notebook=remember_notebook,
+    )
+    return {"notebook_url": notebook_url}
+
+
+async def run_notebooklm_collect(ctx: PipelineContext) -> dict[str, Any]:
+    notebook_url = ctx.outputs["notebooklm_submit"]["notebook_url"]
+    presentation_path, notebook_deleted = await NotebookLMService().collect(notebook_url, _attempt_dir(ctx))
+    return {"presentation_path": presentation_path, "notebook_deleted": notebook_deleted}
 
 
 async def run_extract_slides(ctx: PipelineContext) -> dict[str, Any]:
-    presentation_path = ctx.outputs["notebooklm"]["presentation_path"]
+    presentation_path = ctx.outputs["notebooklm_collect"]["presentation_path"]
     slides_dir = os.path.join(ctx.work_dir, f"slides_attempt_{ctx.attempt_number}")
     slide_images = await slide_extractor.extract_slides(presentation_path, slides_dir)
     all_texts = slide_extractor.extract_slide_texts(presentation_path)
@@ -266,7 +295,7 @@ async def run_upload(ctx: PipelineContext) -> dict[str, Any]:
     composed = ctx.outputs["compose"]
 
     uploaded_urls = await imagekit_uploader.upload_assets(
-        presentation_path=ctx.outputs["notebooklm"]["presentation_path"],
+        presentation_path=ctx.outputs["notebooklm_collect"]["presentation_path"],
         video_path=composed["video_path"],
         thumbnail_path=composed["thumbnail_path"],
         story_id=story_id,
@@ -323,11 +352,19 @@ async def run_upload(ctx: PipelineContext) -> dict[str, Any]:
 
 STAGES: list[StageSpec] = [
     StageSpec(
-        "notebooklm",
-        run_notebooklm,
-        25,
-        "جارٍ أتمتة Google NotebookLM وإنشاء العرض التقديمي والشرائح...",
+        "notebooklm_submit",
+        run_notebooklm_submit,
+        20,
+        "جارٍ إنشاء دفتر الملاحظات وإرسال طلب العرض التقديمي إلى Google NotebookLM...",
+        uses_browser=True,
+    ),
+    StageSpec(
+        "notebooklm_collect",
+        run_notebooklm_collect,
+        35,
+        "جارٍ انتظار اكتمال العرض التقديمي في Google NotebookLM وتنزيله...",
         is_valid=lambda ctx, output: os.path.isfile(output.get("presentation_path", "")),
+        uses_browser=True,
     ),
     StageSpec(
         "extract_slides",

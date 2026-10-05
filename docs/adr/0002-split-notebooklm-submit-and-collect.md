@@ -4,5 +4,7 @@ NotebookLM builds the Slide Deck on Google's side, so holding a browser open for
 
 ## Consequences
 
-- Browser concurrency is capped by configuration (MVP: 1), not by the number of users. Raising it only makes sense with more than one account.
+- Browser concurrency is capped by configuration (`NOTEBOOKLM_BROWSER_CONCURRENCY`, MVP: 1), not by the number of users. Raising it only makes sense with more than one account. Worker concurrency (`JOB_WORKER_CONCURRENCY`) is separate: extra workers let one Job narrate and compose while another waits on NotebookLM.
+- Collect holds its browser while it waits for the deck, rather than polling and re-queueing: simpler, and with one account only one deck generates at a time anyway. Polling would free the browser for other Jobs' Submit once there are several accounts.
+- A finished notebook is deleted after a verified download so a free account's notebook limit is not reached. Notebooks of Jobs that never produce a deck are not cleaned up.
 - The file-based `notebooklm_job.json` resume state is replaced by fields on the Job document.

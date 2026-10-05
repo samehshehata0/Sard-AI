@@ -3,8 +3,9 @@ import json
 import logging
 import os
 import time
+from contextlib import contextmanager
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
@@ -20,6 +21,8 @@ from app.automation.pacing import HumanPacer
 from app.automation.notebooklm_ui import (
     ADD_SOURCES_BUTTON,
     ARTIFACT_DOWNLOAD_PDF,
+    CONFIRM_DELETE_BUTTON,
+    DELETE_MENU_ITEM,
     ARTIFACT_ITEM,
     ARTIFACT_MORE_BUTTON,
     ARTIFACT_OPEN_CARD,
@@ -37,6 +40,8 @@ from app.automation.notebooklm_ui import (
     INSERT_SOURCE_BUTTON,
     MODAL,
     NEW_NOTEBOOK_BUTTON,
+    NOTEBOOK_CARD,
+    NOTEBOOK_CARD_MENU,
     NOTEBOOK_EDITOR,
     OVERFLOW_MENU_BUTTON,
     PASTE_TEXT_AREA,
@@ -87,37 +92,6 @@ class NotebookLMService:
         except Exception as exc:
             logger.warning("[Sard] NotebookLM auto-authentication failed: %s", exc)
 
-        return None
-
-    def _job_state_path(self, target_dir: str) -> str:
-        return os.path.join(target_dir, "notebooklm_job.json")
-
-    def _save_job_state(self, target_dir: str, notebook_url: str) -> None:
-        state = {
-            "notebook_url": notebook_url,
-            "created_at_epoch": time.time(),
-        }
-        Path(self._job_state_path(target_dir)).write_text(
-            json.dumps(state, ensure_ascii=False),
-            encoding="utf-8",
-        )
-
-    def _resumable_notebook_url(self, target_dir: str) -> Optional[str]:
-        state_path = self._job_state_path(target_dir)
-        if not os.path.isfile(state_path):
-            return None
-        try:
-            state = json.loads(Path(state_path).read_text(encoding="utf-8"))
-            notebook_url = str(state.get("notebook_url", ""))
-            created_at = float(state.get("created_at_epoch", 0))
-            age = time.time() - created_at
-            if (
-                "/notebook/" in notebook_url
-                and 0 <= age <= settings.NOTEBOOKLM_RESUME_MAX_AGE_SECONDS
-            ):
-                return notebook_url
-        except (OSError, ValueError, TypeError) as exc:
-            logger.warning("[Sard] Could not read NotebookLM resume state: %s", exc)
         return None
 
     def _handle_dialogs(self, page: Page) -> None:
@@ -505,94 +479,6 @@ class NotebookLMService:
             f"NotebookLM slide deck did not finish within {settings.NOTEBOOKLM_TIMEOUT_SECONDS} seconds"
         )
 
-    def _sync_pipeline(self, file_path: str, prompt: str, target_dir: str) -> str:
-        os.makedirs(target_dir, exist_ok=True)
-        story_text = Path(file_path).read_text(encoding="utf-8").strip()
-        if not story_text:
-            raise PermanentStepError("The educational source is empty")
-
-        storage_path = self._storage_state_path()
-        if not storage_path:
-            raise NeedsLoginError(
-                "NotebookLM authentication is missing; run the repository auth command"
-            )
-
-        logger.info("[Sard] NotebookLM generation started")
-        with sync_playwright() as playwright:
-            try:
-                browser = playwright.chromium.launch(
-                    headless=settings.PLAYWRIGHT_HEADLESS,
-                    ignore_default_args=["--enable-automation"],
-                    args=["--no-sandbox", "--disable-setuid-sandbox"],
-                )
-            except Exception as exc:
-                raise TransientStepError(f"Playwright browser launch failed: {exc}") from exc
-
-            try:
-                context = browser.new_context(
-                    storage_state=storage_path,
-                    viewport={"width": 1440, "height": 900},
-                )
-                page = context.new_page()
-                resume_url = self._resumable_notebook_url(target_dir)
-                page.goto(
-                    resume_url or settings.NOTEBOOKLM_URL,
-                    wait_until="domcontentloaded",
-                    timeout=45000,
-                )
-                wait_until(page, lambda: page_has_landed(page, self.registry), timeout_ms=15_000)
-
-                evidence_dir = os.path.join(target_dir, "notebooklm_artifacts")
-                quota_markers = settings.NOTEBOOKLM_QUOTA_MARKERS
-
-                def step(name, action, **conditions):
-                    return run_step(
-                        page,
-                        name,
-                        action,
-                        evidence_dir=evidence_dir,
-                        quota_markers=quota_markers,
-                        **conditions,
-                    )
-
-                try:
-                    check_session(page, quota_markers)
-
-                    if resume_url:
-                        logger.info("[Sard] Resuming pending NotebookLM slide deck: %s", resume_url)
-                        artifact_path = step("collect", lambda: self._download_artifact(page, target_dir))
-                        logger.info("[Sard] Resumed NotebookLM artifact downloaded: %s", artifact_path)
-                        return artifact_path
-
-                    step(
-                        "create_notebook",
-                        lambda: (self._create_notebook(page), self._dismiss_onboarding_dialogs(page)),
-                        post=lambda: wait_until(page, lambda: self._page_has_notebook_editor(page)),
-                    )
-                    step(
-                        "add_source",
-                        lambda: self._upload_source(page, file_path, story_text),
-                        pre=lambda: self._page_has_notebook_editor(page),
-                        post=lambda: self._wait_for_source_indexing(page, story_text),
-                    )
-                    step("request_slide_deck", lambda: self._request_slide_deck(page, prompt))
-                    self._save_job_state(target_dir, page.url)
-                    artifact_path = step("collect", lambda: self._download_artifact(page, target_dir))
-                    logger.info("[Sard] NotebookLM artifact downloaded: %s", artifact_path)
-                    return artifact_path
-                except Exception as exc:
-                    if getattr(exc, "evidence_dir", None) is None:
-                        evidence = capture_evidence(page, evidence_dir, "pipeline", exc)
-                        if isinstance(exc, NotebookLMGenerationError):
-                            exc.evidence_dir = evidence
-                        logger.error("[Sard] NotebookLM evidence saved to: %s", evidence)
-                    raise
-            finally:
-                browser.close()
-
-    async def run_pipeline(self, file_path: str, prompt: str, target_dir: str) -> str:
-        return await asyncio.to_thread(self._sync_pipeline, file_path, prompt, target_dir)
-
     def _click_all_hamburger_menus_until_download(self, page: Page, target_dir: str) -> Optional[str]:
         """Click every visible NotebookLM hamburger/menu button until the PDF/PPTX
         download action appears. This intentionally includes the left-side source
@@ -646,3 +532,172 @@ class NotebookLMService:
 
         return None
 
+    @contextmanager
+    def _session(self, start_url: str, target_dir: str):
+        """One browser session on NotebookLM, with the login applied and evidence saved on failure.
+
+        Yields (page, step). The browser is always closed on the way out.
+        """
+        os.makedirs(target_dir, exist_ok=True)
+        storage_path = self._storage_state_path()
+        if not storage_path:
+            raise NeedsLoginError("NotebookLM authentication is missing; run the repository auth command")
+
+        with sync_playwright() as playwright:
+            try:
+                browser = playwright.chromium.launch(
+                    headless=settings.PLAYWRIGHT_HEADLESS,
+                    ignore_default_args=["--enable-automation"],
+                    args=["--no-sandbox", "--disable-setuid-sandbox"],
+                )
+            except Exception as exc:
+                raise TransientStepError(f"Playwright browser launch failed: {exc}") from exc
+
+            try:
+                context = browser.new_context(
+                    storage_state=storage_path,
+                    viewport={"width": 1440, "height": 900},
+                )
+                page = context.new_page()
+                page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+                wait_until(page, lambda: page_has_landed(page, self.registry), timeout_ms=15_000)
+
+                evidence_dir = os.path.join(target_dir, "notebooklm_artifacts")
+                quota_markers = settings.NOTEBOOKLM_QUOTA_MARKERS
+
+                def step(name, action, **conditions):
+                    return run_step(
+                        page,
+                        name,
+                        action,
+                        evidence_dir=evidence_dir,
+                        quota_markers=quota_markers,
+                        **conditions,
+                    )
+
+                try:
+                    check_session(page, quota_markers)
+                    yield page, step
+                except Exception as exc:
+                    if getattr(exc, "evidence_dir", None) is None:
+                        evidence = capture_evidence(page, evidence_dir, "pipeline", exc)
+                        if isinstance(exc, NotebookLMGenerationError):
+                            exc.evidence_dir = evidence
+                        logger.error("[Sard] NotebookLM evidence saved to: %s", evidence)
+                    raise
+            finally:
+                browser.close()
+
+    def _sync_submit(
+        self,
+        file_path: str,
+        prompt: str,
+        target_dir: str,
+        notebook_url: Optional[str] = None,
+        on_notebook: Optional[Callable[[str], None]] = None,
+    ) -> str:
+        """Create a notebook, add the source and ask for the Slide Deck. Returns the notebook's URL.
+
+        `on_notebook` is called with the URL the moment the notebook exists, so it can be saved
+        before anything else can go wrong. Given a `notebook_url` from an earlier try, the work
+        continues in that notebook instead of creating another.
+        """
+        story_text = Path(file_path).read_text(encoding="utf-8").strip()
+        if not story_text:
+            raise PermanentStepError("The educational source is empty")
+
+        logger.info("[Sard] NotebookLM submit started (resuming=%s)", bool(notebook_url))
+        with self._session(notebook_url or settings.NOTEBOOKLM_URL, target_dir) as (page, step):
+            if notebook_url:
+                if (
+                    self.registry.find(page, GENERATING_INDICATOR) is not None
+                    or self.registry.find(page, ARTIFACT_ITEM) is not None
+                ):
+                    logger.info("[Sard] The Slide Deck was already requested in %s", notebook_url)
+                    return page.url
+                title = next((line.lstrip("# ").strip() for line in story_text.splitlines() if line.strip()), "")
+                source_added = bool(title) and self.registry.find(
+                    page, SOURCE_TITLE, params={"text": json.dumps(title, ensure_ascii=False)}
+                ) is not None
+                if source_added:
+                    step("await_source", lambda: self._wait_for_source_indexing(page, story_text))
+                else:
+                    step(
+                        "add_source",
+                        lambda: self._upload_source(page, file_path, story_text),
+                        pre=lambda: self._page_has_notebook_editor(page),
+                        post=lambda: self._wait_for_source_indexing(page, story_text),
+                    )
+            else:
+                step(
+                    "create_notebook",
+                    lambda: (self._create_notebook(page), self._dismiss_onboarding_dialogs(page)),
+                    post=lambda: wait_until(page, lambda: self._page_has_notebook_editor(page)),
+                )
+                if on_notebook is not None:
+                    on_notebook(page.url)
+                step(
+                    "add_source",
+                    lambda: self._upload_source(page, file_path, story_text),
+                    pre=lambda: self._page_has_notebook_editor(page),
+                    post=lambda: self._wait_for_source_indexing(page, story_text),
+                )
+            step("request_slide_deck", lambda: self._request_slide_deck(page, prompt))
+            logger.info("[Sard] NotebookLM Slide Deck requested in %s", page.url)
+            return page.url
+
+    def _sync_collect(self, notebook_url: str, target_dir: str) -> tuple[str, bool]:
+        """Wait for the Slide Deck in an existing notebook and download it.
+
+        Returns (path, notebook_deleted). Once the download is verified the notebook is deleted
+        so a free account does not fill up; if that fails it is logged and the download still counts.
+        """
+        logger.info("[Sard] NotebookLM collect started: %s", notebook_url)
+        with self._session(notebook_url, target_dir) as (page, step):
+            artifact_path = step("collect", lambda: self._download_artifact(page, target_dir))
+            logger.info("[Sard] NotebookLM artifact downloaded: %s", artifact_path)
+            return artifact_path, self._delete_notebook(page, notebook_url)
+
+    def _delete_notebook(self, page: Page, notebook_url: str) -> bool:
+        """Delete a notebook from the home page. Never raises: a failure is logged and reported as False."""
+        try:
+            notebook_id = notebook_url.split("?")[0].rstrip("/").rsplit("/", 1)[-1]
+            params = {"id": notebook_id}
+            page.goto(settings.NOTEBOOKLM_URL, wait_until="domcontentloaded", timeout=45000)
+            wait_until(page, lambda: page_has_landed(page, self.registry), timeout_ms=15_000)
+
+            timeout = settings.NOTEBOOKLM_DELETE_TIMEOUT_MS
+            card = self.registry.resolve(page, NOTEBOOK_CARD, timeout_ms=timeout, params=params)
+            menu = self.registry.resolve(page, NOTEBOOK_CARD_MENU, timeout_ms=timeout, scope=card.locator)
+            self.pacer.click(page, menu.locator)
+            delete = self.registry.resolve(page, DELETE_MENU_ITEM, timeout_ms=timeout)
+            self.pacer.click(page, delete.locator)
+            confirm = self.registry.resolve(page, CONFIRM_DELETE_BUTTON, timeout_ms=timeout)
+            self.pacer.click(page, confirm.locator)
+
+            gone = wait_until(
+                page,
+                lambda: self.registry.find(page, NOTEBOOK_CARD, params=params) is None,
+                timeout_ms=timeout,
+            )
+            if gone:
+                logger.info("[Sard] Deleted NotebookLM notebook %s", notebook_id)
+            else:
+                logger.warning("[Sard] NotebookLM notebook %s still listed after deleting it", notebook_id)
+            return gone
+        except Exception as exc:
+            logger.warning("[Sard] Could not delete NotebookLM notebook %s: %s", notebook_url, exc)
+            return False
+
+    async def submit(
+        self,
+        file_path: str,
+        prompt: str,
+        target_dir: str,
+        notebook_url: Optional[str] = None,
+        on_notebook: Optional[Callable[[str], None]] = None,
+    ) -> str:
+        return await asyncio.to_thread(self._sync_submit, file_path, prompt, target_dir, notebook_url, on_notebook)
+
+    async def collect(self, notebook_url: str, target_dir: str) -> tuple[str, bool]:
+        return await asyncio.to_thread(self._sync_collect, notebook_url, target_dir)

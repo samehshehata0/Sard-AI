@@ -57,9 +57,14 @@ class Settings(BaseSettings):
     NOTEBOOKLM_POLL_INTERVAL_SECONDS: float = float(
         os.getenv("NOTEBOOKLM_POLL_INTERVAL_SECONDS", "5")
     )
-    NOTEBOOKLM_RESUME_MAX_AGE_SECONDS: int = int(
-        os.getenv("NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", "7200")
-    )
+    # How long deleting a finished notebook waits for each thing it needs to appear.
+    NOTEBOOKLM_DELETE_TIMEOUT_MS: int = int(os.getenv("NOTEBOOKLM_DELETE_TIMEOUT_MS", "10000"))
+    # How many Jobs are worked on at once, and how many of them may have a NotebookLM browser open
+    # at once. A NotebookLM account runs one generation at a time, so the browser cap stays at 1
+    # until there is more than one account; extra workers then overlap the other Stages of a Job
+    # (narration, video) with another Job's NotebookLM work.
+    JOB_WORKER_CONCURRENCY: int = int(os.getenv("JOB_WORKER_CONCURRENCY", "1"))
+    NOTEBOOKLM_BROWSER_CONCURRENCY: int = int(os.getenv("NOTEBOOKLM_BROWSER_CONCURRENCY", "1"))
     # Human-like pacing of the browser automation: short random pauses, a real
     # mouse move before clicks, long text entered in pieces. Off in tests.
     NOTEBOOKLM_HUMAN_PACING: bool = os.getenv("NOTEBOOKLM_HUMAN_PACING", "true").lower() == "true"

@@ -23,20 +23,28 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    worker_task = None
-    worker = None
+    workers: list[JobWorker] = []
+    tasks: list[asyncio.Task] = []
     if settings.JOB_WORKER_ENABLED:
         # Building the repository never touches MongoDB, so a Mongo outage cannot stop startup.
-        worker = JobWorker(get_job_repository())
-        worker_task = asyncio.create_task(worker.run_forever())
-        logging.info("[Sard] Job worker started")
+        repository = get_job_repository()
+        limiter = asyncio.Semaphore(max(1, settings.NOTEBOOKLM_BROWSER_CONCURRENCY))
+        for _ in range(max(1, settings.JOB_WORKER_CONCURRENCY)):
+            worker = JobWorker(repository, browser_limiter=limiter)
+            workers.append(worker)
+            tasks.append(asyncio.create_task(worker.run_forever()))
+        logging.info(
+            "[Sard] Started %s job worker(s), at most %s NotebookLM browser(s) at once",
+            len(workers),
+            settings.NOTEBOOKLM_BROWSER_CONCURRENCY,
+        )
     try:
         yield
     finally:
-        if worker is not None:
+        for worker in workers:
             worker.stop()
-        if worker_task is not None:
-            worker_task.cancel()
+        for task in tasks:
+            task.cancel()
 
 
 app = FastAPI(
