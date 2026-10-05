@@ -8,6 +8,14 @@ from typing import Optional
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+from app.automation.locators import LocatorNotFoundError
+from app.automation.slide_deck import (
+    DIALOG,
+    GENERATING_INDICATOR,
+    GenerateNowError,
+    build_registry,
+    click_generate_now,
+)
 from app.core.config import settings
 
 
@@ -438,29 +446,28 @@ class NotebookLMService:
 
         page.wait_for_timeout(2500)
 
-        dialog = page.locator("[role='dialog']").last
-        prompt_applied = False
+        registry = build_registry()
+        dialog = page.locator(DIALOG).first
         try:
-            if dialog.count() and dialog.is_visible(timeout=3000):
-                text_area = dialog.locator("textarea, [contenteditable='true']").first
-                if text_area.count() and text_area.is_visible(timeout=2000):
-                    text_area.fill(prompt)
-                    prompt_applied = True
-                generate = dialog.locator(
-                    "button:has-text('Generate'), button:has-text('Create'), button:has-text('إنشاء'), button:has-text('توليد')"
-                ).first
-                if generate.count() and generate.is_visible(timeout=2000):
-                    generate.click(force=True)
+            dialog.wait_for(state="visible", timeout=5000)
+            dialog_open = True
         except Exception:
-            pass
+            dialog_open = False
 
-        if not prompt_applied:
-            page.wait_for_timeout(4000)
-            if page.locator("[role='dialog']").count() == 0:
-                logger.info("[Sard] NotebookLM slide-deck generation action accepted without an inline dialog")
-                return
-
-        logger.info("[Sard] NotebookLM slide-deck generation requested")
+        try:
+            if dialog_open:
+                text_area = dialog.locator("textarea, [contenteditable='true']").first
+                if not text_area.count() or not text_area.is_visible():
+                    raise NotebookLMGenerationError("Slide Deck dialog has no prompt field")
+                text_area.fill(prompt)
+                click_generate_now(page, registry)
+            else:
+                # NotebookLM accepted the click without an inline dialog; still
+                # require proof that generation started.
+                registry.resolve(page, GENERATING_INDICATOR, timeout_ms=60_000)
+                logger.info("[Sard] NotebookLM slide-deck generation started without an inline dialog")
+        except (GenerateNowError, LocatorNotFoundError) as exc:
+            raise NotebookLMGenerationError(str(exc)) from exc
 
     def _wait_for_source_indexing(self, page: Page, story_text: str) -> None:
         title = next(

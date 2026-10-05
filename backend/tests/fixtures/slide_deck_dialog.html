@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- Synthetic fixture mirroring the structure of NotebookLM's Slide Deck dialog
+     (from the XPaths supplied for ticket #10). Replace with a real dump saved by
+     _save_debug_artifacts when one is available. -->
+<html>
+<body>
+  <div></div><div></div><div></div><div></div><div></div><div></div><div></div>
+  <div>
+    <div>
+      <div></div>
+      <div>
+        <mat-dialog-container>
+          <div>
+            <div>
+              <configurable-form-dialog id="dialog">
+                <div>
+                  <textarea></textarea>
+                  <mat-dialog-actions>
+                    <span>
+                      <span><nb-button><button id="later" aria-label="later">Generate later</button></nb-button></span>
+                      <span><nb-button><button id="now" aria-label="now">Generate</button></nb-button></span>
+                    </span>
+                  </mat-dialog-actions>
+                </div>
+              </configurable-form-dialog>
+            </div>
+          </div>
+        </mat-dialog-container>
+      </div>
+    </div>
+  </div>
+  <script>
+    window.clicked = [];
+    document.querySelectorAll('button').forEach(b => b.addEventListener('click', () => {
+      window.clicked.push(b.id);
+      if (b.id === 'now') {
+        document.getElementById('dialog').remove();
+        const card = document.createElement('div');
+        card.textContent = 'Creating slide deck';
+        document.body.appendChild(card);
+      } else {
+        document.getElementById('dialog').remove();
+      }
+    }));
+  </script>
+</body>
+</html>
