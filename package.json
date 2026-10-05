@@ -6,6 +6,7 @@
     "dev": "next dev",
     "backend": "cd backend && python run.py",
     "auth": "cd backend && python save_auth.py",
+    "canary": "cd backend && python notebooklm_canary.py",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
