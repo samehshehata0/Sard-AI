@@ -59,6 +59,11 @@ class Settings(BaseSettings):
     )
     # How long deleting a finished notebook waits for each thing it needs to appear.
     NOTEBOOKLM_DELETE_TIMEOUT_MS: int = int(os.getenv("NOTEBOOKLM_DELETE_TIMEOUT_MS", "10000"))
+    # When NotebookLM refuses new decks for the day, Jobs wait and are tried again. Set this to the
+    # time of day (UTC, "HH:MM") the free quota resets once it is known; until then the account is
+    # probed every NOTEBOOKLM_QUOTA_PROBE_MINUTES.
+    NOTEBOOKLM_QUOTA_RESET_UTC: str = os.getenv("NOTEBOOKLM_QUOTA_RESET_UTC", "")
+    NOTEBOOKLM_QUOTA_PROBE_MINUTES: int = int(os.getenv("NOTEBOOKLM_QUOTA_PROBE_MINUTES", "60"))
     # How many Jobs are worked on at once, and how many of them may have a NotebookLM browser open
     # at once. A NotebookLM account runs one generation at a time, so the browser cap stays at 1
     # until there is more than one account; extra workers then overlap the other Stages of a Job

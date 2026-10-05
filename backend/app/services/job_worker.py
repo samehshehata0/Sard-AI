@@ -6,12 +6,20 @@ import socket
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Optional
+from typing import Callable, Optional
 
+from app.automation.errors import NeedsLoginError, QuotaExhaustedError
 from app.core.config import settings
 from app.schemas.story import StoryGenerationRequest
 from app.services import pipeline
-from app.services.job_repository import JobRepository, JobStoreUnavailable, LeaseLost
+from app.services.job_repository import (
+    NEEDS_LOGIN,
+    QUOTA_EXHAUSTED,
+    JobRepository,
+    JobStoreUnavailable,
+    LeaseLost,
+)
+from app.services.notebooklm_service import session_file_modified_at
 from app.services.pipeline import InsufficientSlidesError, PipelineContext, StageSpec
 
 
@@ -22,6 +30,19 @@ def retry_delay_seconds(attempts: int) -> int:
     """Wait before the next try: 30 s after the first failure, then 2 min, then 10 min (configurable)."""
     backoff = settings.JOB_RETRY_BACKOFF_SECONDS or (30,)
     return backoff[min(max(attempts, 1) - 1, len(backoff) - 1)]
+
+
+def quota_resume_at(now: datetime) -> datetime:
+    """When to try again after NotebookLM refused new decks.
+
+    At the configured daily reset time (UTC "HH:MM") if known; otherwise after a probe interval.
+    """
+    reset = settings.NOTEBOOKLM_QUOTA_RESET_UTC.strip()
+    if reset:
+        hour, minute = (int(part) for part in reset.split(":"))
+        candidate = now.replace(hour=hour, minute=minute, second=0, microsecond=0)
+        return candidate if candidate > now else candidate + timedelta(days=1)
+    return now + timedelta(minutes=settings.NOTEBOOKLM_QUOTA_PROBE_MINUTES)
 
 
 class Heartbeat:
@@ -81,8 +102,11 @@ class JobWorker:
         lease_seconds: Optional[float] = None,
         heartbeat_seconds: Optional[float] = None,
         browser_limiter: Optional[asyncio.Semaphore] = None,
+        session_checker: Callable[[], Optional[datetime]] = session_file_modified_at,
     ) -> None:
         self.repository = repository
+        # When the saved NotebookLM login was last written; a newer file means someone logged in again.
+        self.session_checker = session_checker
         # Shared by every worker in this process: caps how many NotebookLM browsers are open at once.
         self.browser_limiter = browser_limiter
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
@@ -162,6 +186,8 @@ class JobWorker:
             # Only so many NotebookLM browsers may be open at once; a Job waits its turn here.
             limiter = self.browser_limiter if (spec.uses_browser and self.browser_limiter) else contextlib.nullcontext()
             async with limiter:
+                if spec.uses_browser and await self._service_is_blocked(job_id, spec.name):
+                    return
                 attempts = await asyncio.to_thread(
                     self.repository.start_stage, job_id, spec.name, spec.progress, spec.step, **write
                 )
@@ -202,6 +228,10 @@ class JobWorker:
         evidence_dir = getattr(exc, "evidence_dir", None)
         write = {"worker_id": self.worker_id}
 
+        if isinstance(exc, (NeedsLoginError, QuotaExhaustedError)):
+            await self._park(job_id, spec.name, exc)
+            return
+
         if isinstance(exc, InsufficientSlidesError):
             if job.get("expansions", 0) < settings.GENERATION_RETRY_LIMIT:
                 logger.warning("[Sard][job %s] Deck too short (%s slides); asking for a longer one", job_id, exc.count)
@@ -233,9 +263,73 @@ class JobWorker:
             )
             await asyncio.to_thread(self.repository.dead_letter, job_id, error, spec.name, detail, evidence_dir, **write)
 
+    async def _park(self, job_id: str, stage: str, exc: Exception) -> None:
+        """NotebookLM cannot be used right now: wait instead of failing, and tell everyone waiting."""
+        if isinstance(exc, NeedsLoginError):
+            kind, resume_at = NEEDS_LOGIN, None
+        else:
+            kind, resume_at = QUOTA_EXHAUSTED, quota_resume_at(datetime.now(timezone.utc))
+        parked_others = await asyncio.to_thread(self.repository.block_service, kind, str(exc), resume_at)
+        await asyncio.to_thread(
+            self.repository.park_job, job_id, kind, stage, True, self.worker_id
+        )
+        if kind == NEEDS_LOGIN:
+            logger.error(
+                "[Sard] NotebookLM LOGIN EXPIRED: job %s and %s other waiting job(s) are parked, not failed. "
+                "Run `npm run auth` to log in again; they resume by themselves.",
+                job_id,
+                parked_others,
+            )
+        else:
+            logger.error(
+                "[Sard] NotebookLM QUOTA REACHED: job %s and %s other waiting job(s) are parked, not failed. "
+                "They resume at %s.",
+                job_id,
+                parked_others,
+                resume_at.isoformat() if resume_at else "an unknown time",
+            )
+
+    async def _service_is_blocked(self, job_id: str, stage: str) -> bool:
+        """If NotebookLM is known to be unusable, park this Job without opening a browser to find out again."""
+        flag = await asyncio.to_thread(self.repository.get_service_flag)
+        if not flag or flag.get("status") not in (NEEDS_LOGIN, QUOTA_EXHAUSTED):
+            return False
+        logger.info("[Sard][job %s] NotebookLM is %s; parking instead of opening a browser", job_id, flag["status"])
+        await asyncio.to_thread(self.repository.park_job, job_id, flag["status"], stage, False, self.worker_id)
+        return True
+
+    async def resume_if_ready(self) -> int:
+        """Unpark Jobs once the login has been renewed or the quota is due to reset. Returns how many resumed."""
+        flag = await asyncio.to_thread(self.repository.get_service_flag)
+        if not flag:
+            return 0
+        since = flag["since"].replace(tzinfo=timezone.utc) if flag["since"].tzinfo is None else flag["since"]
+
+        if flag["status"] == NEEDS_LOGIN:
+            saved = self.session_checker()
+            if saved is None or saved <= since:
+                return 0
+            reason = "the login was renewed"
+        elif flag["status"] == QUOTA_EXHAUSTED:
+            resume_at = flag.get("resume_at")
+            if resume_at is None:
+                return 0
+            if resume_at.tzinfo is None:
+                resume_at = resume_at.replace(tzinfo=timezone.utc)
+            if datetime.now(timezone.utc) < resume_at:
+                return 0
+            reason = "the quota is due to reset"
+        else:
+            return 0
+
+        resumed = await asyncio.to_thread(self.repository.unblock_service, flag["status"])
+        logger.warning("[Sard] NotebookLM usable again (%s): resumed %s parked job(s)", reason, resumed)
+        return resumed
+
     async def run_forever(self) -> None:
         while not self._stopping:
             try:
+                await self.resume_if_ready()
                 if not await self.process_one():
                     await asyncio.sleep(self.poll_interval)
             except LeaseLost:

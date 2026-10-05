@@ -3,6 +3,7 @@ import {
   completeStory,
   failStory,
   getStoryForUser,
+  markStoryBlocked,
   saveGeneratedScript,
   updateStoryProgress,
 } from "@/lib/story-repository";
@@ -14,7 +15,21 @@ const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8
 const REQUEST_TIMEOUT_MS = 10_000;
 
 // "failed" cannot be fixed by retrying; "dead_letter" used every attempt and waits for an admin.
-export type JobState = "queued" | "running" | "completed" | "failed" | "dead_letter" | "cancelled";
+// "needs_login" and "quota_exhausted" are parked: waiting for a person or for time to pass, not failed.
+export type JobState =
+  | "queued"
+  | "running"
+  | "completed"
+  | "failed"
+  | "dead_letter"
+  | "cancelled"
+  | "needs_login"
+  | "quota_exhausted";
+
+const BLOCKED_MESSAGES = {
+  needs_login: "بانتظار تسجيل الدخول إلى NotebookLM. سيُستأنف التوليد تلقائيًا بعد تجديد الجلسة.",
+  quota_exhausted: "تم بلوغ الحد اليومي لإنشاء العروض. سيُستأنف التوليد تلقائيًا عند تجدد الحصة.",
+} as const;
 
 interface PythonScene {
   scene_number?: number;
@@ -229,6 +244,9 @@ export async function syncStoryWithJob(story: StoryDocument, userId: string): Pr
     await completeStory(story._id, assets);
   } else if (job.state === "failed" || job.state === "dead_letter" || job.state === "cancelled") {
     await failStory(story._id, job.error || "توقف التوليد بسبب خطأ.");
+  } else if (job.state === "needs_login" || job.state === "quota_exhausted") {
+    if (story.blockedReason === job.state) return story;
+    await markStoryBlocked(story._id, job.state, job.step || BLOCKED_MESSAGES[job.state]);
   } else if (job.state === "queued" && job.step && story.currentStep !== job.step) {
     // Queued again after a failed stage: say so instead of freezing on the old step.
     await updateStoryProgress(story._id, Math.max(story.progress, 25), job.step);

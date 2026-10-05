@@ -25,7 +25,20 @@ DEAD_LETTER = "dead_letter"
 # Cancelled by its user while still waiting in the queue.
 CANCELLED = "cancelled"
 
-ACTIVE_STATES = [QUEUED, RUNNING]
+# Parked: waiting for a person or for time to pass, not failed. They keep every finished Stage and
+# the attempts they had; they resume by themselves once the cause is gone.
+NEEDS_LOGIN = "needs_login"
+QUOTA_EXHAUSTED = "quota_exhausted"
+PARKED_STATES = [NEEDS_LOGIN, QUOTA_EXHAUSTED]
+
+# A user's active Jobs: everything that is not finished yet, parked ones included.
+ACTIVE_STATES = [QUEUED, RUNNING, *PARKED_STATES]
+
+SERVICE_FLAG_ID = "notebooklm"
+PARKED_STEPS = {
+    NEEDS_LOGIN: "بانتظار تسجيل الدخول إلى NotebookLM. سيُستأنف التوليد تلقائيًا بعد تجديد الجلسة.",
+    QUOTA_EXHAUSTED: "تم بلوغ الحد اليومي لإنشاء العروض في NotebookLM. سيُستأنف التوليد تلقائيًا عند تجدد الحصة.",
+}
 CANCELLED_MESSAGE = "أُلغي طلب التوليد."
 
 WAITING_STEP = "بانتظار إعادة المحاولة..."
@@ -94,6 +107,11 @@ class JobRepository:
         self.collection = collection
         self._indexes_ready = False
 
+    @property
+    def flags(self):
+        """Service-wide state, such as "NotebookLM needs a login", next to the Jobs."""
+        return self.collection.database["service_state"]
+
     @classmethod
     def connect(cls) -> "JobRepository":
         client = MongoClient(settings.MONGODB_URI, serverSelectionTimeoutMS=settings.JOB_STORE_TIMEOUT_MS)
@@ -155,7 +173,7 @@ class JobRepository:
         """Cancel a Job that is still waiting. Returns cancelled, not_found, forbidden or not_cancellable."""
         now = _now()
         cancelled = self.collection.find_one_and_update(
-            {"_id": job_id, "state": QUEUED, "user_id": user_id},
+            {"_id": job_id, "state": {"$in": [QUEUED, *PARKED_STATES]}, "user_id": user_id},
             {
                 "$set": {"state": CANCELLED, "error": CANCELLED_MESSAGE, "finished_at": now, "updated_at": now},
                 "$unset": {"lease_until": "", "active_fingerprint": ""},
@@ -413,6 +431,84 @@ class JobRepository:
     ) -> None:
         """The Job used every attempt on a Stage. It is kept, with its error and evidence."""
         self._finish(DEAD_LETTER, job_id, error, stage, detail, evidence_dir, worker_id)
+
+    # --- parking: waiting for a login or for the quota, not failing ---------------------------
+
+    @_guarded
+    def park_job(
+        self,
+        job_id: str,
+        kind: str,
+        stage: str,
+        refund_attempt: bool = True,
+        worker_id: Optional[str] = None,
+    ) -> None:
+        """Park a Job. The attempt it had just started on `stage` is given back, so waiting never
+        uses up its retries."""
+        now = _now()
+        update: dict[str, Any] = {
+            "$set": {
+                "state": kind,
+                "step": PARKED_STEPS[kind],
+                "error": PARKED_STEPS[kind],
+                "parked_at": now,
+                "updated_at": now,
+                f"stages.{stage}.state": "waiting",
+            },
+            "$unset": {"lease_until": ""},
+        }
+        if refund_attempt:
+            update["$inc"] = {f"stages.{stage}.attempts": -1}
+        self._write(job_id, update, worker_id)
+
+    @_guarded
+    def block_service(self, kind: str, message: str, resume_at: Optional[datetime] = None) -> int:
+        """Record that NotebookLM cannot be used, and park every waiting Job that still needs it.
+
+        Returns how many Jobs were parked. Jobs that already have their deck do not need
+        NotebookLM again, so they are left to carry on.
+        """
+        now = _now()
+        self.flags.update_one(
+            {"_id": SERVICE_FLAG_ID},
+            {"$set": {"status": kind, "since": now, "resume_at": resume_at, "message": message}},
+            upsert=True,
+        )
+        result = self.collection.update_many(
+            {"state": QUEUED, "stages.notebooklm_collect.state": {"$ne": "done"}},
+            {
+                "$set": {
+                    "state": kind,
+                    "step": PARKED_STEPS[kind],
+                    "error": PARKED_STEPS[kind],
+                    "parked_at": now,
+                    "updated_at": now,
+                }
+            },
+        )
+        return result.modified_count
+
+    @_guarded
+    def get_service_flag(self) -> Optional[dict[str, Any]]:
+        return self.flags.find_one({"_id": SERVICE_FLAG_ID})
+
+    @_guarded
+    def unblock_service(self, kind: str) -> int:
+        """NotebookLM can be used again: clear the flag and queue the parked Jobs. Returns how many."""
+        now = _now()
+        self.flags.delete_one({"_id": SERVICE_FLAG_ID, "status": kind})
+        result = self.collection.update_many(
+            {"state": kind},
+            {
+                "$set": {"state": QUEUED, "run_after": now, "step": WAITING_STEP, "updated_at": now},
+                "$unset": {"error": "", "parked_at": ""},
+            },
+        )
+        return result.modified_count
+
+    @_guarded
+    def parked_counts(self) -> dict[str, int]:
+        return {kind: self.collection.count_documents({"state": kind}) for kind in PARKED_STATES}
 
     @_guarded
     def requeue(self, job_id: str) -> bool:

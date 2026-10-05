@@ -198,8 +198,8 @@ def test_a_waiting_job_does_not_block_other_jobs(monkeypatch, repository):
 
 @pytest.mark.parametrize(
     "error",
-    [PermanentStepError("bad"), NeedsLoginError("login"), QuotaExhaustedError("quota"), ValueError("no slides")],
-    ids=["permanent", "needs-login", "quota", "value-error"],
+    [PermanentStepError("bad"), ValueError("no slides")],
+    ids=["permanent", "value-error"],
 )
 def test_errors_that_retrying_cannot_fix_are_not_retried(repository, error):
     stages = FakeStages(plan={"compose": [error]})

@@ -110,3 +110,25 @@ def requeue_job(
         return public_view(repository.get(job_id))
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail=UNAVAILABLE_MESSAGE)
+
+
+@router.get("/notebooklm/status")
+def notebooklm_status(repository: JobRepository = Depends(get_job_repository)):
+    """Is NotebookLM usable? When a login has expired or the quota is reached this says so, and how many Jobs wait."""
+    try:
+        flag = repository.get_service_flag()
+        parked = repository.parked_counts()
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail=UNAVAILABLE_MESSAGE)
+
+    def iso(value):
+        return value.isoformat() if value is not None else None
+
+    return {
+        "status": flag["status"] if flag else "ok",
+        "since": iso(flag.get("since")) if flag else None,
+        "resume_at": iso(flag.get("resume_at")) if flag else None,
+        "message": flag.get("message") if flag else None,
+        "parked_jobs": parked,
+        "action": "run `npm run auth` to log in again" if flag and flag["status"] == "needs_login" else None,
+    }
