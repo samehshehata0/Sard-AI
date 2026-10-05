@@ -2,6 +2,7 @@ import logging
 
 from playwright.sync_api import Locator, Page
 
+from app.automation.errors import PermanentStepError, TransientStepError
 from app.automation.locators import (
     LocatorNotFoundError,
     LocatorRegistry,
@@ -20,8 +21,12 @@ GENERATING_INDICATOR = "slide_deck.generating_indicator"
 LATER_LABEL_MARKERS = ("later", "لاحق")
 
 
-class GenerateNowError(RuntimeError):
+class GenerateNowError(TransientStepError):
     """Generate now could not be chosen, or generation did not visibly start."""
+
+
+class GenerateNowLayoutError(PermanentStepError):
+    """The dialog does not look like we expect, so clicking could pick the wrong action."""
 
 
 def _require_last_of_two_actions(button: Locator) -> None:
@@ -101,7 +106,9 @@ def click_generate_now(
     """
     try:
         resolved = registry.resolve(page, GENERATE_NOW, timeout_ms=find_timeout_ms)
-    except (LocatorNotFoundError, LocatorValidationError) as exc:
+    except LocatorValidationError as exc:
+        raise GenerateNowLayoutError(str(exc)) from exc
+    except LocatorNotFoundError as exc:
         raise GenerateNowError(str(exc)) from exc
 
     # The action may stay disabled until the form is ready; wait, don't force.

@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     NOTEBOOKLM_RESUME_MAX_AGE_SECONDS: int = int(
         os.getenv("NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", "7200")
     )
+    # Comma-separated texts NotebookLM shows when it refuses new Slide Decks.
+    # Empty until the real wording is captured (see issue #13), so quota
+    # detection stays off instead of guessing.
+    NOTEBOOKLM_QUOTA_MARKERS: tuple[str, ...] = tuple(
+        marker.strip()
+        for marker in os.getenv("NOTEBOOKLM_QUOTA_MARKERS", "").split(",")
+        if marker.strip()
+    )
 
     # Existing free Hugging Face / Edge TTS provider.
     HF_API_TOKEN: str = os.getenv("HF_API_TOKEN", "")

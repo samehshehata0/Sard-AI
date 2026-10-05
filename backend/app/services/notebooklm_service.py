@@ -8,22 +8,25 @@ from typing import Optional
 
 from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
 
+from app.automation.errors import (
+    NeedsLoginError,
+    NotebookLMGenerationError,
+    PermanentStepError,
+    TransientStepError,
+)
+from app.automation.evidence import capture_evidence
 from app.automation.locators import LocatorNotFoundError
 from app.automation.slide_deck import (
     DIALOG,
     GENERATING_INDICATOR,
-    GenerateNowError,
     build_registry,
     click_generate_now,
 )
+from app.automation.steps import check_session, run_step, wait_until
 from app.core.config import settings
 
 
 logger = logging.getLogger(__name__)
-
-
-class NotebookLMGenerationError(RuntimeError):
-    user_message = "تعذر إنشاء العرض التعليمي عبر NotebookLM. يرجى إعادة المحاولة."
 
 
 class NotebookLMService:
@@ -379,7 +382,7 @@ class NotebookLMService:
                         break
                     page.wait_for_timeout(250)
                 if not insert_button.is_enabled():
-                    raise NotebookLMGenerationError("Copied-text insert button was unavailable")
+                    raise TransientStepError("Copied-text insert button was unavailable")
                 insert_button.click()
                 logger.info("[Sard] NotebookLM source uploaded as copied text")
                 return
@@ -393,9 +396,9 @@ class NotebookLMService:
                 logger.info("[Sard] NotebookLM source uploaded as file")
                 return
         except Exception as exc:
-            raise NotebookLMGenerationError(f"NotebookLM source upload failed: {exc}") from exc
+            raise TransientStepError(f"NotebookLM source upload failed: {exc}") from exc
 
-        raise NotebookLMGenerationError("NotebookLM did not accept the educational source")
+        raise TransientStepError("NotebookLM did not accept the educational source")
 
     def _request_slide_deck(self, page: Page, prompt: str) -> None:
         page.keyboard.press("Escape")
@@ -425,7 +428,7 @@ class NotebookLMService:
             except Exception:
                 continue
         if slide_control is None:
-            raise NotebookLMGenerationError("NotebookLM Slide Deck control was not found")
+            raise TransientStepError("NotebookLM Slide Deck control was not found")
 
         page.wait_for_timeout(1500)
 
@@ -454,20 +457,20 @@ class NotebookLMService:
         except Exception:
             dialog_open = False
 
-        try:
-            if dialog_open:
-                text_area = dialog.locator("textarea, [contenteditable='true']").first
-                if not text_area.count() or not text_area.is_visible():
-                    raise NotebookLMGenerationError("Slide Deck dialog has no prompt field")
-                text_area.fill(prompt)
-                click_generate_now(page, registry)
-            else:
-                # NotebookLM accepted the click without an inline dialog; still
-                # require proof that generation started.
+        if dialog_open:
+            text_area = dialog.locator("textarea, [contenteditable='true']").first
+            if not text_area.count() or not text_area.is_visible():
+                raise TransientStepError("Slide Deck dialog has no prompt field")
+            text_area.fill(prompt)
+            click_generate_now(page, registry)
+        else:
+            # NotebookLM accepted the click without an inline dialog; still
+            # require proof that generation started.
+            try:
                 registry.resolve(page, GENERATING_INDICATOR, timeout_ms=60_000)
-                logger.info("[Sard] NotebookLM slide-deck generation started without an inline dialog")
-        except (GenerateNowError, LocatorNotFoundError) as exc:
-            raise NotebookLMGenerationError(str(exc)) from exc
+            except LocatorNotFoundError as exc:
+                raise TransientStepError(str(exc)) from exc
+            logger.info("[Sard] NotebookLM slide-deck generation started without an inline dialog")
 
     def _wait_for_source_indexing(self, page: Page, story_text: str) -> None:
         title = next(
@@ -495,7 +498,7 @@ class NotebookLMService:
             output_path = os.path.join(target_dir, f"notebooklm_presentation{suffix}")
             download.save_as(output_path)
             if os.path.getsize(output_path) < 10_000:
-                raise NotebookLMGenerationError("Downloaded NotebookLM artifact is too small")
+                raise TransientStepError("Downloaded NotebookLM artifact is too small")
             return output_path
         except Exception:
             return None
@@ -611,47 +614,19 @@ class NotebookLMService:
                 next_progress_log += 60.0
             page.wait_for_timeout(poll_ms)
 
-        raise NotebookLMGenerationError(
+        raise TransientStepError(
             f"NotebookLM slide deck did not finish within {settings.NOTEBOOKLM_TIMEOUT_SECONDS} seconds"
         )
-
-    def _save_debug_artifacts(self, page: Page, target_dir: str) -> str:
-        artifact_dir = os.path.join(target_dir, "notebooklm_artifacts")
-        os.makedirs(artifact_dir, exist_ok=True)
-
-        screenshot_path = os.path.join(artifact_dir, "notebooklm_failure.png")
-        html_path = os.path.join(artifact_dir, "notebooklm_page.html")
-        body_html_path = os.path.join(artifact_dir, "notebooklm_body.html")
-
-        try:
-            page.screenshot(path=screenshot_path, full_page=True)
-        except Exception as exc:
-            logger.warning("[Sard] Could not capture NotebookLM screenshot: %s", exc)
-
-        try:
-            page_html = page.content()
-            Path(html_path).write_text(page_html, encoding="utf-8")
-        except Exception as exc:
-            logger.warning("[Sard] Could not save NotebookLM page HTML: %s", exc)
-
-        try:
-            body_html = page.locator("body").evaluate("(element) => element.outerHTML")
-            if body_html:
-                Path(body_html_path).write_text(body_html, encoding="utf-8")
-        except Exception as exc:
-            logger.warning("[Sard] Could not save NotebookLM body HTML: %s", exc)
-
-        return artifact_dir
 
     def _sync_pipeline(self, file_path: str, prompt: str, target_dir: str) -> str:
         os.makedirs(target_dir, exist_ok=True)
         story_text = Path(file_path).read_text(encoding="utf-8").strip()
         if not story_text:
-            raise NotebookLMGenerationError("The educational source is empty")
+            raise PermanentStepError("The educational source is empty")
 
         storage_path = self._storage_state_path()
         if not storage_path:
-            raise NotebookLMGenerationError(
+            raise NeedsLoginError(
                 "NotebookLM authentication is missing; run the repository auth command"
             )
 
@@ -664,7 +639,7 @@ class NotebookLMService:
                     args=["--no-sandbox", "--disable-setuid-sandbox"],
                 )
             except Exception as exc:
-                raise NotebookLMGenerationError(f"Playwright browser launch failed: {exc}") from exc
+                raise TransientStepError(f"Playwright browser launch failed: {exc}") from exc
 
             try:
                 context = browser.new_context(
@@ -679,30 +654,52 @@ class NotebookLMService:
                     timeout=45000,
                 )
                 page.wait_for_timeout(4000)
-                if "accounts.google.com" in page.url or "signin" in page.url:
-                    raise NotebookLMGenerationError("NotebookLM authentication session expired")
+
+                evidence_dir = os.path.join(target_dir, "notebooklm_artifacts")
+                quota_markers = settings.NOTEBOOKLM_QUOTA_MARKERS
+
+                def step(name, action, **conditions):
+                    return run_step(
+                        page,
+                        name,
+                        action,
+                        evidence_dir=evidence_dir,
+                        quota_markers=quota_markers,
+                        **conditions,
+                    )
 
                 try:
+                    check_session(page, quota_markers)
+
                     if resume_url:
                         logger.info("[Sard] Resuming pending NotebookLM slide deck: %s", resume_url)
-                        artifact_path = self._download_artifact(page, target_dir)
+                        artifact_path = step("collect", lambda: self._download_artifact(page, target_dir))
                         logger.info("[Sard] Resumed NotebookLM artifact downloaded: %s", artifact_path)
                         return artifact_path
 
-                    self._create_notebook(page)
-                    self._dismiss_onboarding_dialogs(page)
-                    self._upload_source(page, file_path, story_text)
-                    logger.info("[Sard] Waiting for NotebookLM source indexing")
-                    self._wait_for_source_indexing(page, story_text)
+                    step(
+                        "create_notebook",
+                        lambda: (self._create_notebook(page), self._dismiss_onboarding_dialogs(page)),
+                        post=lambda: wait_until(page, lambda: self._page_has_notebook_editor(page)),
+                    )
+                    step(
+                        "add_source",
+                        lambda: self._upload_source(page, file_path, story_text),
+                        pre=lambda: self._page_has_notebook_editor(page),
+                        post=lambda: self._wait_for_source_indexing(page, story_text),
+                    )
                     page.wait_for_timeout(15000)
-                    self._request_slide_deck(page, prompt)
+                    step("request_slide_deck", lambda: self._request_slide_deck(page, prompt))
                     self._save_job_state(target_dir, page.url)
-                    artifact_path = self._download_artifact(page, target_dir)
+                    artifact_path = step("collect", lambda: self._download_artifact(page, target_dir))
                     logger.info("[Sard] NotebookLM artifact downloaded: %s", artifact_path)
                     return artifact_path
-                except Exception:
-                    debug_dir = self._save_debug_artifacts(page, target_dir)
-                    logger.error("[Sard] NotebookLM debug artifacts saved to: %s", debug_dir)
+                except Exception as exc:
+                    if getattr(exc, "evidence_dir", None) is None:
+                        evidence = capture_evidence(page, evidence_dir, "pipeline", exc)
+                        if isinstance(exc, NotebookLMGenerationError):
+                            exc.evidence_dir = evidence
+                        logger.error("[Sard] NotebookLM evidence saved to: %s", evidence)
                     raise
             finally:
                 browser.close()
