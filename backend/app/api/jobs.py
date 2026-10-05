@@ -1,12 +1,14 @@
+import re
 import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Response
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from app.core.config import settings
 from app.schemas.story import StoryGenerationRequest
+from app.services import temp_cleanup
 from app.services.job_repository import (
     JobRepository,
     JobStoreUnavailable,
@@ -31,10 +33,21 @@ def get_job_repository() -> JobRepository:
     return _repository
 
 
+SAFE_ID = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
+
+
 class JobCreateRequest(StoryGenerationRequest):
     job_id: Optional[str] = None
     # Who is asking, as the web app knows them. Needed for the per-user limit and duplicate check.
     user_id: Optional[str] = None
+
+    @field_validator("story_id")
+    @classmethod
+    def story_id_is_safe_in_a_path(cls, value):
+        # The id names the Job's working folder, so it must never be able to point elsewhere.
+        if value is not None and not SAFE_ID.match(value):
+            raise ValueError("story_id must be letters, digits, '-' or '_' (at most 64 characters)")
+        return value
 
 
 class JobCancelRequest(BaseModel):
@@ -77,6 +90,8 @@ def cancel_job(job_id: str, body: JobCancelRequest, repository: JobRepository = 
         if job and job["state"] == "running":
             raise HTTPException(status_code=409, detail="لا يمكن إلغاء مهمة قيد التنفيذ.")
         raise HTTPException(status_code=409, detail="لا يمكن إلغاء مهمة انتهت بالفعل.")
+    if job.get("story_id"):
+        temp_cleanup.remove_work_dir(job["story_id"])  # a cancelled Job's files are not needed any more
     return public_view(job)
 
 

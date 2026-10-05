@@ -12,6 +12,9 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
     pip install --no-cache-dir -r requirements.txt
 
+# The NotebookLM automation drives a real Chromium, which needs its own system libraries.
+RUN playwright install --with-deps chromium
+
 # Copy the rest of the application
 COPY . .
 

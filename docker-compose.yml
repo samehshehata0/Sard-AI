@@ -1,25 +1,69 @@
-version: '3.8'
+# Sard AI: web app, Python backend (API + job worker) and MongoDB.
+#
+#   docker compose up --build
+#
+# Put real settings in .env (see .env.example). The NotebookLM login is made on the host with
+# `npm run auth` and shared with the container through ./backend/auth, so set
+#   NOTEBOOKLM_STORAGE_STATE_PATH=auth/storage_state.json
+# in .env before running it. When the login expires, the jobs wait; run `npm run auth` again and
+# they resume by themselves.
 
 services:
+  mongo:
+    image: mongo:7
+    restart: unless-stopped
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "--eval", "db.adminCommand('ping').ok"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # The API and the job worker run in this one process (JOB_WORKER_ENABLED, on by default).
   backend:
     build:
       context: ./backend
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
       - "8000:8000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      BACKEND_HOST: 0.0.0.0
+      BACKEND_RELOAD: "false"
+      MONGODB_URI: mongodb://mongo:27017
+      TEMP_DIR: /data/temp
+      NOTEBOOKLM_STORAGE_STATE_PATH: /data/auth/storage_state.json
+    volumes:
+      - backend_temp:/data/temp
+      - ./backend/auth:/data/auth:ro
     depends_on:
-      - frontend
+      mongo:
+        condition: service_healthy
 
   frontend:
     build:
       context: .
       dockerfile: Dockerfile
+    restart: unless-stopped
     ports:
       - "3000:3000"
+    env_file:
+      - path: .env
+        required: false
     environment:
-      - NEXT_PUBLIC_API_URL=http://localhost:8000
+      MONGODB_URI: mongodb://mongo:27017
+      PYTHON_BACKEND_URL: http://backend:8000
+      NEXT_PUBLIC_API_URL: http://localhost:8000
     depends_on:
-      - backend
+      mongo:
+        condition: service_healthy
+      backend:
+        condition: service_started
 
+volumes:
+  mongo_data:
+  backend_temp:

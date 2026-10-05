@@ -20,7 +20,6 @@ The stages are:
 import asyncio
 import logging
 import os
-import uuid
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
@@ -395,26 +394,3 @@ STAGES: list[StageSpec] = [
 
 def work_dir_for(story_id: str) -> str:
     return os.path.join(settings.TEMP_DIR, story_id)
-
-
-def new_context(req: StoryGenerationRequest) -> PipelineContext:
-    story_id = req.story_id or str(uuid.uuid4())
-    return PipelineContext(request=req.model_copy(update={"story_id": story_id}), work_dir=work_dir_for(story_id))
-
-
-async def run_inline(req: StoryGenerationRequest) -> StoryGenerationResponse:
-    """Run every Stage once, in this process, with no retry. The old synchronous endpoint uses this."""
-    ctx = new_context(req)
-    while True:
-        try:
-            for spec in STAGES:
-                ctx.outputs[spec.name] = await spec.run(ctx)
-            break
-        except InsufficientSlidesError as exc:
-            if ctx.expansions >= settings.GENERATION_RETRY_LIMIT:
-                raise PermanentStepError(
-                    f"NotebookLM returned {exc.count} unique slides after controlled retry"
-                ) from exc
-            ctx.expansions += 1
-            ctx.outputs.clear()
-    return StoryGenerationResponse(**ctx.outputs["upload"])

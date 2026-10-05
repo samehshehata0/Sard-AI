@@ -1,6 +1,7 @@
 import asyncio
 import contextlib
 import logging
+import time
 import os
 import socket
 import threading
@@ -21,6 +22,7 @@ from app.services.job_repository import (
 )
 from app.services.notebooklm_service import session_file_modified_at
 from app.services.pipeline import InsufficientSlidesError, PipelineContext, StageSpec
+from app.services import temp_cleanup
 
 
 logger = logging.getLogger(__name__)
@@ -117,6 +119,7 @@ class JobWorker:
         self.stages = list(stages if stages is not None else pipeline.STAGES)
         self.poll_interval = settings.JOB_POLL_INTERVAL_SECONDS if poll_interval is None else poll_interval
         self._stopping = False
+        self._last_purge = 0.0
 
     def stop(self) -> None:
         self._stopping = True
@@ -218,8 +221,14 @@ class JobWorker:
             ctx.outputs[spec.name] = output
             await asyncio.to_thread(self.repository.save_stage_output, job_id, spec.name, output, **write)
 
-        await asyncio.to_thread(self.repository.complete, job_id, ctx.outputs[self.stages[-1].name], **write)
+        result = ctx.outputs[self.stages[-1].name]
+        await asyncio.to_thread(self.repository.complete, job_id, result, **write)
         logger.info("[Sard][job %s] Completed", job_id)
+        # The Job is done: keep only the files its result links to. Never let this fail the Job.
+        try:
+            await asyncio.to_thread(temp_cleanup.trim_after_completion, ctx.story_id, result)
+        except Exception as exc:
+            logger.warning("[Sard][job %s] Temporary files could not be cleaned up: %s", job_id, exc)
 
     async def _handle_failure(self, job: dict, spec: StageSpec, attempts: int, exc: Exception) -> None:
         job_id = job["_id"]
@@ -298,6 +307,19 @@ class JobWorker:
         await asyncio.to_thread(self.repository.park_job, job_id, flag["status"], stage, False, self.worker_id)
         return True
 
+    async def purge_if_due(self) -> list[str]:
+        """Clear old working files, at most once per JOB_TEMP_PURGE_INTERVAL_SECONDS."""
+        if time.monotonic() - self._last_purge < settings.JOB_TEMP_PURGE_INTERVAL_SECONDS and self._last_purge:
+            return []
+        self._last_purge = time.monotonic()
+        try:
+            return await asyncio.to_thread(temp_cleanup.purge_stale, self.repository)
+        except JobStoreUnavailable:
+            raise
+        except Exception as exc:
+            logger.warning("[Sard] Purging old working files failed: %s", exc)
+            return []
+
     async def resume_if_ready(self) -> int:
         """Unpark Jobs once the login has been renewed or the quota is due to reset. Returns how many resumed."""
         flag = await asyncio.to_thread(self.repository.get_service_flag)
@@ -330,6 +352,7 @@ class JobWorker:
         while not self._stopping:
             try:
                 await self.resume_if_ready()
+                await self.purge_if_due()
                 if not await self.process_one():
                     await asyncio.sleep(self.poll_interval)
             except LeaseLost:

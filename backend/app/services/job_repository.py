@@ -216,6 +216,11 @@ class JobRepository:
         return job
 
     @_guarded
+    def latest_for_story(self, story_id: str) -> Optional[dict[str, Any]]:
+        """The most recent Job made for a story."""
+        return self.collection.find_one({"story_id": story_id}, sort=[("created_at", -1)])
+
+    @_guarded
     def get(self, job_id: str) -> Optional[dict[str, Any]]:
         return self.collection.find_one({"_id": job_id})
 

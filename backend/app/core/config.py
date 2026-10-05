@@ -64,6 +64,10 @@ class Settings(BaseSettings):
     # probed every NOTEBOOKLM_QUOTA_PROBE_MINUTES.
     NOTEBOOKLM_QUOTA_RESET_UTC: str = os.getenv("NOTEBOOKLM_QUOTA_RESET_UTC", "")
     NOTEBOOKLM_QUOTA_PROBE_MINUTES: int = int(os.getenv("NOTEBOOKLM_QUOTA_PROBE_MINUTES", "60"))
+    # Working files of Jobs that ended without a result (failed, dead-lettered, cancelled) are kept this
+    # long so an admin can still requeue them, then removed. Checked every JOB_TEMP_PURGE_INTERVAL_SECONDS.
+    JOB_TEMP_RETENTION_DAYS: float = float(os.getenv("JOB_TEMP_RETENTION_DAYS", "7"))
+    JOB_TEMP_PURGE_INTERVAL_SECONDS: float = float(os.getenv("JOB_TEMP_PURGE_INTERVAL_SECONDS", "3600"))
     # How many Jobs are worked on at once, and how many of them may have a NotebookLM browser open
     # at once. A NotebookLM account runs one generation at a time, so the browser cap stays at 1
     # until there is more than one account; extra workers then overlap the other Stages of a Job
