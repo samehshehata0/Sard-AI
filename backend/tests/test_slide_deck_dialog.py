@@ -7,6 +7,7 @@ from app.automation.locators import LocatorNotFoundError, LocatorValidationError
 from app.automation.slide_deck import (
     GENERATE_NOW,
     GenerateNowError,
+    GenerateNowLayoutError,
     build_registry,
     click_generate_now,
 )
@@ -69,8 +70,9 @@ def test_single_action_dialog_fails_loudly_without_clicking(page):
     load(page, FIXTURE.replace(
         '<span><nb-button><button id="later" aria-label="later">Generate later</button></nb-button></span>', ""
     ))
-    with pytest.raises(GenerateNowError) as excinfo:
+    with pytest.raises(GenerateNowLayoutError) as excinfo:
         click_generate_now(page, build_registry(), find_timeout_ms=1000)
+    assert excinfo.value.retryable is False
     assert "layout" in str(excinfo.value)
     assert page.evaluate("window.clicked") == []
 
@@ -81,7 +83,7 @@ def test_last_action_labelled_later_is_refused_even_if_it_is_last(page):
     flipped = flipped.replace('id="later"', 'id="tmp"').replace('id="now"', 'id="later"').replace('id="tmp"', 'id="now"')
     # Now the DOM is: [id=now "Generate"], [id=later "Generate later"]; later is last.
     load(page, flipped)
-    with pytest.raises(GenerateNowError) as excinfo:
+    with pytest.raises(GenerateNowLayoutError) as excinfo:
         click_generate_now(page, build_registry(), find_timeout_ms=1000)
     assert "later" in str(excinfo.value).lower()
     assert page.evaluate("window.clicked") == []
@@ -98,4 +100,5 @@ def test_dialog_closing_without_generating_state_is_an_error(page):
     load(page, html)
     with pytest.raises(GenerateNowError) as excinfo:
         click_generate_now(page, build_registry(), find_timeout_ms=1000, started_timeout_ms=1000)
+    assert excinfo.value.retryable is True
     assert "generating" in str(excinfo.value)
