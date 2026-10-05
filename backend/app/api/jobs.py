@@ -1,7 +1,9 @@
+import secrets
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, Header, HTTPException
 
+from app.core.config import settings
 from app.schemas.story import StoryGenerationRequest
 from app.services.job_repository import JobRepository, JobStoreUnavailable, public_view
 
@@ -47,3 +49,24 @@ def get_job(job_id: str, repository: JobRepository = Depends(get_job_repository)
     if job is None:
         raise HTTPException(status_code=404, detail="مهمة التوليد غير موجودة.")
     return public_view(job)
+
+
+@router.post("/jobs/{job_id}/requeue")
+def requeue_job(
+    job_id: str,
+    x_admin_token: Optional[str] = Header(None),
+    repository: JobRepository = Depends(get_job_repository),
+):
+    """Admin only: queue a failed or dead-lettered Job again. Stages that finished are reused."""
+    token = settings.JOB_ADMIN_TOKEN
+    if not token or not x_admin_token or not secrets.compare_digest(x_admin_token, token):
+        raise HTTPException(status_code=403, detail="غير مصرح لك بإعادة تشغيل المهام.")
+    try:
+        job = repository.get(job_id)
+        if job is None:
+            raise HTTPException(status_code=404, detail="مهمة التوليد غير موجودة.")
+        if not repository.requeue(job_id):
+            raise HTTPException(status_code=409, detail="لا يمكن إعادة تشغيل إلا مهمة فشلت أو توقفت بعد استنفاد المحاولات.")
+        return public_view(repository.get(job_id))
+    except JobStoreUnavailable:
+        raise HTTPException(status_code=503, detail=UNAVAILABLE_MESSAGE)

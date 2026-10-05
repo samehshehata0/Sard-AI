@@ -15,7 +15,12 @@ logger = logging.getLogger(__name__)
 QUEUED = "queued"
 RUNNING = "running"
 COMPLETED = "completed"
+# Failed with an error that retrying cannot fix.
 FAILED = "failed"
+# Gave up after using every attempt on a Stage; kept so an admin can requeue it.
+DEAD_LETTER = "dead_letter"
+
+WAITING_STEP = "بانتظار إعادة المحاولة..."
 
 RUNNING_STEP = "جارٍ أتمتة Google NotebookLM وإنشاء العرض التقديمي والشرائح..."
 
@@ -101,20 +106,140 @@ class JobRepository:
         )
 
     @_guarded
+    def start_stage(self, job_id: str, stage: str, progress: int, step: str) -> int:
+        """Record that a Stage is starting. Returns how many attempts this Stage has now used."""
+        now = _now()
+        job = self.collection.find_one_and_update(
+            {"_id": job_id},
+            {
+                "$inc": {f"stages.{stage}.attempts": 1},
+                "$set": {
+                    "stage": stage,
+                    "progress": progress,
+                    "step": step,
+                    f"stages.{stage}.state": "running",
+                    "updated_at": now,
+                },
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        return job["stages"][stage]["attempts"]
+
+    @_guarded
+    def save_stage_output(self, job_id: str, stage: str, output: dict[str, Any]) -> None:
+        self.collection.update_one(
+            {"_id": job_id},
+            {"$set": {f"stages.{stage}.state": "done", f"stages.{stage}.output": output, "updated_at": _now()}},
+        )
+
+    @staticmethod
+    def _evidence(stage: str, error: str, detail: str, evidence_dir: Optional[str]) -> dict[str, Any]:
+        return {"stage": stage, "at": _now(), "error": error, "detail": detail, "evidence_dir": evidence_dir}
+
+    @_guarded
+    def schedule_retry(
+        self,
+        job_id: str,
+        stage: str,
+        error: str,
+        run_after: datetime,
+        detail: str = "",
+        evidence_dir: Optional[str] = None,
+    ) -> None:
+        """Put the Job back in the queue to be tried again later, keeping every finished Stage."""
+        self.collection.update_one(
+            {"_id": job_id},
+            {
+                "$set": {
+                    "state": QUEUED,
+                    "run_after": run_after,
+                    "step": WAITING_STEP,
+                    "error": error,
+                    f"stages.{stage}.state": "waiting",
+                    "updated_at": _now(),
+                },
+                "$push": {"failures": self._evidence(stage, error, detail, evidence_dir)},
+            },
+        )
+
+    @_guarded
+    def reset_stages(self, job_id: str, stages: list[str], expand: bool = False) -> None:
+        """Forget the output of some Stages and queue the Job to run again straight away."""
+        now = _now()
+        update: dict[str, Any] = {
+            "$set": {"state": QUEUED, "run_after": now, "step": WAITING_STEP, "updated_at": now},
+            "$unset": {f"stages.{stage}": "" for stage in stages},
+        }
+        if expand:
+            update["$inc"] = {"expansions": 1}
+        self.collection.update_one({"_id": job_id}, update)
+
+    @_guarded
     def complete(self, job_id: str, result: dict[str, Any]) -> None:
         now = _now()
         self.collection.update_one(
             {"_id": job_id},
-            {"$set": {"state": COMPLETED, "progress": 100, "result": result, "finished_at": now, "updated_at": now}},
+            {
+                "$set": {"state": COMPLETED, "progress": 100, "result": result, "finished_at": now, "updated_at": now},
+                "$unset": {"error": ""},
+            },
         )
 
-    @_guarded
-    def fail(self, job_id: str, error: str) -> None:
+    def _finish(
+        self,
+        state: str,
+        job_id: str,
+        error: str,
+        stage: Optional[str],
+        detail: str,
+        evidence_dir: Optional[str],
+    ) -> None:
         now = _now()
-        self.collection.update_one(
-            {"_id": job_id},
-            {"$set": {"state": FAILED, "error": error, "finished_at": now, "updated_at": now}},
-        )
+        update: dict[str, Any] = {"$set": {"state": state, "error": error, "finished_at": now, "updated_at": now}}
+        if stage:
+            update["$push"] = {"failures": self._evidence(stage, error, detail, evidence_dir)}
+        self.collection.update_one({"_id": job_id}, update)
+
+    @_guarded
+    def fail(
+        self,
+        job_id: str,
+        error: str,
+        stage: Optional[str] = None,
+        detail: str = "",
+        evidence_dir: Optional[str] = None,
+    ) -> None:
+        """The Job failed in a way that retrying cannot fix."""
+        self._finish(FAILED, job_id, error, stage, detail, evidence_dir)
+
+    @_guarded
+    def dead_letter(
+        self,
+        job_id: str,
+        error: str,
+        stage: str,
+        detail: str = "",
+        evidence_dir: Optional[str] = None,
+    ) -> None:
+        """The Job used every attempt on a Stage. It is kept, with its error and evidence."""
+        self._finish(DEAD_LETTER, job_id, error, stage, detail, evidence_dir)
+
+    @_guarded
+    def requeue(self, job_id: str) -> bool:
+        """Queue a failed or dead-lettered Job again. Finished Stages are reused; the one that failed gets fresh attempts."""
+        job = self.collection.find_one({"_id": job_id})
+        if job is None or job["state"] not in (FAILED, DEAD_LETTER):
+            return False
+        now = _now()
+        update: dict[str, Any] = {
+            "$set": {"state": QUEUED, "run_after": now, "step": WAITING_STEP, "updated_at": now},
+            "$unset": {"error": "", "finished_at": ""},
+        }
+        failed_stage = job.get("stage")
+        if failed_stage:
+            update["$set"][f"stages.{failed_stage}.attempts"] = 0
+        self.collection.update_one({"_id": job_id}, update)
+        return True
 
 
 def public_view(job: dict[str, Any]) -> dict[str, Any]:
@@ -130,6 +255,12 @@ def public_view(job: dict[str, Any]) -> dict[str, Any]:
         "progress": job.get("progress", 0),
         "step": job.get("step"),
         "attempts": job.get("attempts", 0),
+        "stage": job.get("stage"),
+        "stages": {
+            name: {"state": data.get("state"), "attempts": data.get("attempts", 0)}
+            for name, data in (job.get("stages") or {}).items()
+        },
+        "run_after": iso(job.get("run_after")),
         "error": job.get("error"),
         "result": job.get("result"),
         "created_at": iso(job.get("created_at")),

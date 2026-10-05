@@ -11,7 +11,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI, Request, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
-from app.api.endpoints import generate_story, router
+from app.api.endpoints import router
 from app.api.jobs import get_job_repository, router as jobs_router
 from app.core.config import settings
 from app.services.job_worker import JobWorker
@@ -27,7 +27,7 @@ async def lifespan(_app: FastAPI):
     worker = None
     if settings.JOB_WORKER_ENABLED:
         # Building the repository never touches MongoDB, so a Mongo outage cannot stop startup.
-        worker = JobWorker(get_job_repository(), generate_story)
+        worker = JobWorker(get_job_repository())
         worker_task = asyncio.create_task(worker.run_forever())
         logging.info("[Sard] Job worker started")
     try:

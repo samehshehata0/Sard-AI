@@ -13,7 +13,8 @@ const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8
 // Enqueueing and reading a Job are quick calls; generation itself runs in the Python worker.
 const REQUEST_TIMEOUT_MS = 10_000;
 
-export type JobState = "queued" | "running" | "completed" | "failed";
+// "failed" cannot be fixed by retrying; "dead_letter" used every attempt and waits for an admin.
+export type JobState = "queued" | "running" | "completed" | "failed" | "dead_letter";
 
 interface PythonScene {
   scene_number?: number;
@@ -178,8 +179,11 @@ export async function syncStoryWithJob(story: StoryDocument, userId: string): Pr
       scenes,
     });
     await completeStory(story._id, assets);
-  } else if (job.state === "failed") {
+  } else if (job.state === "failed" || job.state === "dead_letter") {
     await failStory(story._id, job.error || "توقف التوليد بسبب خطأ.");
+  } else if (job.state === "queued" && job.step && story.currentStep !== job.step) {
+    // Queued again after a failed stage: say so instead of freezing on the old step.
+    await updateStoryProgress(story._id, Math.max(story.progress, 25), job.step);
   } else {
     return story;
   }

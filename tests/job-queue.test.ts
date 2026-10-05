@@ -215,6 +215,25 @@ describe("syncStoryWithJob", () => {
     expect(completeStory).not.toHaveBeenCalled();
   });
 
+  it("treats a dead-lettered job as a failed story, with the job's error", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "dead_letter", error: "تعذر إنشاء الصوت" }));
+    await syncStoryWithJob(story({ status: "generating" }), "u1");
+    expect(failStory).toHaveBeenCalledWith("s1", "تعذر إنشاء الصوت");
+    expect(completeStory).not.toHaveBeenCalled();
+  });
+
+  it("says so when a job is waiting to be retried", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "queued", step: "بانتظار إعادة المحاولة..." }));
+    await syncStoryWithJob(story({ status: "generating", progress: 65, currentStep: "جارٍ إنشاء التعليق الصوتي..." }), "u1");
+    expect(updateStoryProgress).toHaveBeenCalledWith("s1", 65, "بانتظار إعادة المحاولة...");
+  });
+
+  it("does not rewrite a retry message that is already shown", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "queued", step: "بانتظار إعادة المحاولة..." }));
+    await syncStoryWithJob(story({ status: "generating", progress: 65, currentStep: "بانتظار إعادة المحاولة..." }), "u1");
+    expect(updateStoryProgress).not.toHaveBeenCalled();
+  });
+
   it("fails the story when the backend has no record of its job", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ detail: "no" }, 404));
     await syncStoryWithJob(story(), "u1");
