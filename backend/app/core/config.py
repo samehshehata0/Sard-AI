@@ -22,6 +22,13 @@ class Settings(BaseSettings):
     JOB_WORKER_ENABLED: bool = os.getenv("JOB_WORKER_ENABLED", "true").lower() == "true"
     JOB_POLL_INTERVAL_SECONDS: float = float(os.getenv("JOB_POLL_INTERVAL_SECONDS", "2"))
     JOB_STORE_TIMEOUT_MS: int = int(os.getenv("JOB_STORE_TIMEOUT_MS", "2000"))
+    # Each Stage of a Job is tried up to this many times, waiting longer each time.
+    JOB_STAGE_MAX_ATTEMPTS: int = int(os.getenv("JOB_STAGE_MAX_ATTEMPTS", "3"))
+    JOB_RETRY_BACKOFF_SECONDS: tuple[int, ...] = tuple(
+        int(value) for value in os.getenv("JOB_RETRY_BACKOFF_SECONDS", "30,120,600").split(",") if value.strip()
+    )
+    # Needed to requeue a dead-lettered Job over the API. Empty means the endpoint is off.
+    JOB_ADMIN_TOKEN: str = os.getenv("JOB_ADMIN_TOKEN", "")
 
     # ImageKit Settings
     IMAGEKIT_PUBLIC_KEY: str = os.getenv("IMAGEKIT_PUBLIC_KEY", "")

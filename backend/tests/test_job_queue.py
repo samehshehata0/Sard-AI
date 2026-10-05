@@ -3,11 +3,11 @@ from datetime import datetime, timedelta, timezone
 
 import mongomock
 import pytest
-from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pymongo.errors import ServerSelectionTimeoutError
 
 from app.api.jobs import get_job_repository
+from app.automation.errors import PermanentStepError
 from app.main import app
 from app.schemas.story import GeneratedScene, StoryGenerationRequest, StoryGenerationResponse
 from app.services.job_repository import (
@@ -18,7 +18,9 @@ from app.services.job_repository import (
     JobRepository,
     JobStoreUnavailable,
 )
-from app.services.job_worker import GENERIC_FAILURE, JobWorker
+from app.services import pipeline
+from app.services.job_worker import JobWorker
+from app.services.pipeline import StageSpec
 
 
 def story_request(story_id="story-1", title="قصة الشمس"):
@@ -153,8 +155,17 @@ def test_mongo_down_is_reported_not_swallowed():
 # --- worker ----------------------------------------------------------------
 
 
+def single_stage(runner):
+    """A one-stage pipeline around an async function that takes the request."""
+
+    async def run(ctx):
+        return (await runner(ctx.request)).model_dump()
+
+    return StageSpec("pipeline", run, 25, "جارٍ التوليد")
+
+
 def make_worker(repository, runner):
-    return JobWorker(repository, runner, poll_interval=0)
+    return JobWorker(repository, poll_interval=0, stages=[single_stage(runner)])
 
 
 def test_worker_with_nothing_queued_does_nothing(repository):
@@ -184,23 +195,13 @@ def test_worker_runs_the_pipeline_and_stores_the_result(repository):
 
 def test_worker_records_the_pipelines_arabic_failure_message(repository):
     async def runner(req):
-        raise HTTPException(status_code=500, detail="تعذر إنشاء العرض التعليمي عبر NotebookLM. يرجى إعادة المحاولة.")
+        raise PermanentStepError("empty source")
 
     repository.enqueue("story-1", story_request(), job_id="job-1")
     asyncio.run(make_worker(repository, runner).process_one())
     job = repository.get("job-1")
     assert job["state"] == FAILED
     assert job["error"].startswith("تعذر إنشاء العرض التعليمي")
-
-
-def test_worker_turns_an_unexpected_crash_into_a_failed_job(repository):
-    async def runner(req):
-        raise RuntimeError("boom")
-
-    repository.enqueue("story-1", story_request(), job_id="job-1")
-    asyncio.run(make_worker(repository, runner).process_one())
-    assert repository.get("job-1")["state"] == FAILED
-    assert repository.get("job-1")["error"] == GENERIC_FAILURE
 
 
 def test_worker_runs_jobs_one_at_a_time_in_order(repository):
@@ -229,7 +230,7 @@ def test_worker_loop_survives_the_job_store_going_down_and_stops_on_request():
     async def runner(req):
         raise AssertionError("no job should run")
 
-    worker = JobWorker(JobRepository(DownCollection()), runner, poll_interval=0)
+    worker = make_worker(JobRepository(DownCollection()), runner)
 
     async def scenario():
         task = asyncio.create_task(worker.run_forever())
@@ -330,14 +331,13 @@ def wait_for_state(client, job_id, wanted, seconds=5):
 
 def test_app_worker_picks_up_a_posted_job_and_finishes_it(monkeypatch, repository):
     import app.api.jobs as jobs_module
-    import app.main as main_module
     from app.core.config import settings
 
     async def fake_pipeline(req):
         return completed_response(req.story_id)
 
     monkeypatch.setattr(jobs_module, "_repository", repository)
-    monkeypatch.setattr(main_module, "generate_story", fake_pipeline)
+    monkeypatch.setattr(pipeline, "STAGES", [single_stage(fake_pipeline)])
     monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_SECONDS", 0.02)
 
     with TestClient(app) as client:  # entering the client runs the app's lifespan, which starts the worker
@@ -351,14 +351,13 @@ def test_app_worker_picks_up_a_posted_job_and_finishes_it(monkeypatch, repositor
 
 def test_app_worker_turns_a_pipeline_failure_into_a_failed_job(monkeypatch, repository):
     import app.api.jobs as jobs_module
-    import app.main as main_module
     from app.core.config import settings
 
     async def failing_pipeline(req):
-        raise HTTPException(status_code=500, detail="تعذر إنشاء العرض التعليمي عبر NotebookLM. يرجى إعادة المحاولة.")
+        raise PermanentStepError("source rejected")
 
     monkeypatch.setattr(jobs_module, "_repository", repository)
-    monkeypatch.setattr(main_module, "generate_story", failing_pipeline)
+    monkeypatch.setattr(pipeline, "STAGES", [single_stage(failing_pipeline)])
     monkeypatch.setattr(settings, "JOB_POLL_INTERVAL_SECONDS", 0.02)
 
     with TestClient(app) as client:
