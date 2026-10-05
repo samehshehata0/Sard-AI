@@ -410,12 +410,17 @@ def test_real_stages_narration_failure_does_not_repeat_notebooklm_or_finished_sl
     artifact.write_bytes(b"%PDF synthetic" + b"x" * 12_000)
 
     notebook_runs = []
+    collects = []
     narration_calls = []
     failed_once = []
 
-    async def fake_notebook(self, file_path, prompt, target_dir):
+    async def fake_submit(self, file_path, prompt, target_dir, notebook_url=None, on_notebook=None):
         notebook_runs.append(target_dir)
-        return str(artifact)
+        return "https://notebooklm.google.com/notebook/real-stages"
+
+    async def fake_collect(self, notebook_url, target_dir):
+        collects.append(notebook_url)
+        return str(artifact), True
 
     async def fake_extract(presentation_path, output_dir):
         return visuals
@@ -436,7 +441,8 @@ def test_real_stages_narration_failure_does_not_repeat_notebooklm_or_finished_sl
         "VIDEO_FPS": 10, "MIN_SLIDE_DURATION": 0.55, "SLIDE_PADDING": 0.05, "MIN_VIDEO_BYTES": 1000,
     }.items():
         monkeypatch.setattr(settings, name, value)
-    monkeypatch.setattr(NotebookLMService, "run_pipeline", fake_notebook)
+    monkeypatch.setattr(NotebookLMService, "submit", fake_submit)
+    monkeypatch.setattr(NotebookLMService, "collect", fake_collect)
     monkeypatch.setattr(pipeline.slide_extractor, "extract_slides", fake_extract)
     monkeypatch.setattr(pipeline.slide_extractor, "extract_slide_texts", lambda path: ["فكرة تعليمية"] * 8)
     monkeypatch.setattr(pipeline.narration_service, "generate_narration", fake_narration)
@@ -453,9 +459,12 @@ def test_real_stages_narration_failure_does_not_repeat_notebooklm_or_finished_sl
     assert all(scene["duration_seconds"] > 0 for scene in job["result"]["scenes"])
     assert job["result"]["video_url"] == "http://local/v.mp4"
 
-    assert len(notebook_runs) == 1  # NotebookLM ran once, despite the narration failure
+    assert len(notebook_runs) == 1  # NotebookLM was asked once, despite the narration failure
+    assert collects == ["https://notebooklm.google.com/notebook/real-stages"]  # and the deck fetched once
     assert narration_calls[:5] == [f"scene_0{n}.mp3" for n in range(1, 6)]
     # Slides 1-4 were narrated before the failure and not again: 5 tries + slides 5-8 on the retry.
     assert len(narration_calls) == 9
     assert job["stages"]["narrate"]["attempts"] == 2
-    assert job["stages"]["notebooklm"]["attempts"] == 1
+    assert job["stages"]["notebooklm_submit"]["attempts"] == 1
+    assert job["stages"]["notebooklm_collect"]["attempts"] == 1
+    assert job["stages"]["notebooklm_collect"]["output"]["notebook_deleted"] is True

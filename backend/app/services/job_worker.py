@@ -1,4 +1,5 @@
 import asyncio
+import contextlib
 import logging
 import os
 import socket
@@ -79,8 +80,11 @@ class JobWorker:
         worker_id: Optional[str] = None,
         lease_seconds: Optional[float] = None,
         heartbeat_seconds: Optional[float] = None,
+        browser_limiter: Optional[asyncio.Semaphore] = None,
     ) -> None:
         self.repository = repository
+        # Shared by every worker in this process: caps how many NotebookLM browsers are open at once.
+        self.browser_limiter = browser_limiter
         self.worker_id = worker_id or f"{socket.gethostname()}-{os.getpid()}-{uuid.uuid4().hex[:6]}"
         self.lease_seconds = settings.JOB_LEASE_SECONDS if lease_seconds is None else lease_seconds
         heartbeat = settings.JOB_HEARTBEAT_SECONDS if heartbeat_seconds is None else heartbeat_seconds
@@ -99,6 +103,11 @@ class JobWorker:
             request=request,
             work_dir=pipeline.work_dir_for(request.story_id or job["_id"]),
             expansions=job.get("expansions", 0),
+            partial={name: data.get("partial", {}) for name, data in (job.get("stages") or {}).items()},
+            # Runs in the thread of a browser Stage, so it uses the plain synchronous repository.
+            save_partial=lambda stage, data: self.repository.save_stage_partial(
+                job["_id"], stage, data, worker_id=self.worker_id
+            ),
         )
 
     async def process_one(self) -> bool:
@@ -150,31 +159,34 @@ class JobWorker:
                 continue
             reuse = False
 
-            attempts = await asyncio.to_thread(
-                self.repository.start_stage, job_id, spec.name, spec.progress, spec.step, **write
-            )
-            if attempts > settings.JOB_STAGE_MAX_ATTEMPTS:
-                # Every attempt was used, the last ones by workers that died mid-Stage:
-                # this Job keeps killing its workers, so stop feeding it new ones.
-                logger.error("[Sard][job %s] Stage %s keeps stopping its worker; moving to dead letter", job_id, spec.name)
-                await asyncio.to_thread(
-                    self.repository.dead_letter,
-                    job_id,
-                    pipeline.arabic_failure(RuntimeError()),
-                    spec.name,
-                    f"Worker stopped during stage {spec.name} {attempts - 1} times",
-                    None,
-                    **write,
+            # Only so many NotebookLM browsers may be open at once; a Job waits its turn here.
+            limiter = self.browser_limiter if (spec.uses_browser and self.browser_limiter) else contextlib.nullcontext()
+            async with limiter:
+                attempts = await asyncio.to_thread(
+                    self.repository.start_stage, job_id, spec.name, spec.progress, spec.step, **write
                 )
-                return
-            logger.info("[Sard][job %s] Stage %s starting (attempt %s)", job_id, spec.name, attempts)
-            try:
-                output = await spec.run(ctx)
-            except (JobStoreUnavailable, LeaseLost):
-                raise
-            except Exception as exc:
-                await self._handle_failure(job, spec, attempts, exc)
-                return
+                if attempts > settings.JOB_STAGE_MAX_ATTEMPTS:
+                    # Every attempt was used, the last ones by workers that died mid-Stage:
+                    # this Job keeps killing its workers, so stop feeding it new ones.
+                    logger.error("[Sard][job %s] Stage %s keeps stopping its worker; moving to dead letter", job_id, spec.name)
+                    await asyncio.to_thread(
+                        self.repository.dead_letter,
+                        job_id,
+                        pipeline.arabic_failure(RuntimeError()),
+                        spec.name,
+                        f"Worker stopped during stage {spec.name} {attempts - 1} times",
+                        None,
+                        **write,
+                    )
+                    return
+                logger.info("[Sard][job %s] Stage %s starting (attempt %s)", job_id, spec.name, attempts)
+                try:
+                    output = await spec.run(ctx)
+                except (JobStoreUnavailable, LeaseLost):
+                    raise
+                except Exception as exc:
+                    await self._handle_failure(job, spec, attempts, exc)
+                    return
             if heartbeat.lost:
                 raise LeaseLost(f"Job {job_id} was taken over while stage {spec.name} ran")
             ctx.outputs[spec.name] = output

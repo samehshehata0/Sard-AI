@@ -58,7 +58,12 @@ def test_fixture_resolves_through_the_expected_strategy(page, path):
     header = parse_header(html)
     page.set_content(html)
 
-    params = {"text": json.dumps(header["text"], ensure_ascii=False)} if "text" in header else None
+    params = {}
+    if "text" in header:
+        params["text"] = json.dumps(header["text"], ensure_ascii=False)
+    if "id" in header:
+        params["id"] = header["id"]
+    params = params or None
 
     if "hidden" in header:
         # Hidden elements such as file inputs only need to exist.

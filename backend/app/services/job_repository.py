@@ -301,6 +301,15 @@ class JobRepository:
             worker_id,
         )
 
+    @_guarded
+    def save_stage_partial(
+        self, job_id: str, stage: str, data: dict[str, Any], worker_id: Optional[str] = None
+    ) -> None:
+        """Save progress a Stage made before it finished, such as the notebook it created."""
+        update = {f"stages.{stage}.partial.{key}": value for key, value in data.items()}
+        update["updated_at"] = _now()
+        self._write(job_id, {"$set": update}, worker_id)
+
     @staticmethod
     def _evidence(stage: str, error: str, detail: str, evidence_dir: Optional[str]) -> dict[str, Any]:
         return {"stage": stage, "at": _now(), "error": error, "detail": detail, "evidence_dir": evidence_dir}

@@ -37,6 +37,10 @@ DOWNLOAD_MENU_ITEM = "download.menu_item"
 HAMBURGER_BUTTON = "download.hamburger_button"
 HAMBURGER_MENU_ITEM = "download.hamburger_menu_item"
 HAMBURGER_OWNER_BUTTON = "download.hamburger_owner_button"
+NOTEBOOK_CARD = "home.notebook_card"
+NOTEBOOK_CARD_MENU = "home.notebook_card_menu"
+DELETE_MENU_ITEM = "home.delete_menu_item"
+CONFIRM_DELETE_BUTTON = "home.confirm_delete_button"
 
 # Selectors that need a value are filled from `params`; the caller quotes it.
 _TITLE_TEXT = ":text({text})"
@@ -356,6 +360,44 @@ def build_registry() -> LocatorRegistry:
         ),
         screen="artifact_menu",
     )
+    # --- deleting a finished notebook from the home page ---------------------
+    # Resolved with params={"id": <notebook id>}. These are the least certain selectors in the
+    # catalogue (they have not been seen on the live page); a failed delete is logged, never fatal.
+    registry.register(
+        NOTEBOOK_CARD,
+        tiered(
+            structure=(
+                "mat-card:has(a[href*='/notebook/{id}'])",
+                "project-button:has(a[href*='/notebook/{id}'])",
+                "article:has(a[href*='/notebook/{id}'])",
+            )
+        ),
+        screen="home_notebook",
+    )
+    registry.register(
+        NOTEBOOK_CARD_MENU,
+        tiered(
+            aria=("button[aria-label='المزيد']", "button[aria-label*='More']", "button[aria-label*='options']"),
+            icon=("button:has(mat-icon:has-text('more_vert'))",),
+        ),
+        screen="home_notebook",
+    )
+    registry.register(
+        DELETE_MENU_ITEM,
+        tiered(text=("[role='menuitem']:has-text('حذف')", "[role='menuitem']:has-text('Delete')")),
+        screen="home_notebook_menu",
+    )
+    registry.register(
+        CONFIRM_DELETE_BUTTON,
+        tiered(
+            text=(
+                "[role='dialog'] button:has-text('حذف'), [role='alertdialog'] button:has-text('حذف')",
+                "[role='dialog'] button:has-text('Delete'), [role='alertdialog'] button:has-text('Delete')",
+            )
+        ),
+        screen="home_notebook_menu",
+    )
+
     # Resolved with an icon inside a button as scope: the button that owns it.
     registry.register(
         HAMBURGER_OWNER_BUTTON,

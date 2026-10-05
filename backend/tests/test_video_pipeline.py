@@ -26,6 +26,23 @@ from app.services.video_composer import VideoComposer
 from app.services.video_slide import VideoSlide
 
 
+def patch_notebooklm(monkeypatch, artifact=None, submits=None, fail_with=None):
+    """Replace NotebookLM's two browser stages: Submit returns a notebook URL, Collect the downloaded deck."""
+
+    async def submit(self, file_path, prompt, target_dir, notebook_url=None, on_notebook=None):
+        if submits is not None:
+            submits.append(target_dir)
+        if fail_with is not None:
+            raise fail_with
+        return "https://notebooklm.google.com/notebook/fake-notebook"
+
+    async def collect(self, notebook_url, target_dir):
+        return str(artifact), True
+
+    monkeypatch.setattr(NotebookLMService, "submit", submit)
+    monkeypatch.setattr(NotebookLMService, "collect", collect)
+
+
 def request_fixture(story_id: str = "water-story") -> StoryGenerationRequest:
     return StoryGenerationRequest(
         story_id=story_id,
@@ -138,32 +155,6 @@ def test_slide_target_and_expansion_prompt():
     assert str(settings.MIN_SLIDES) in prompt
 
 
-def test_notebooklm_pending_job_can_be_resumed(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", 1800)
-    service = NotebookLMService()
-    notebook_url = "https://notebooklm.google.com/notebook/example-job"
-
-    service._save_job_state(str(tmp_path), notebook_url)
-
-    assert service._resumable_notebook_url(str(tmp_path)) == notebook_url
-
-
-def test_notebooklm_stale_job_is_not_resumed(tmp_path, monkeypatch):
-    monkeypatch.setattr(settings, "NOTEBOOKLM_RESUME_MAX_AGE_SECONDS", 60)
-    state_path = tmp_path / "notebooklm_job.json"
-    state_path.write_text(
-        json.dumps(
-            {
-                "notebook_url": "https://notebooklm.google.com/notebook/stale-job",
-                "created_at_epoch": time.time() - 61,
-            }
-        ),
-        encoding="utf-8",
-    )
-
-    assert NotebookLMService()._resumable_notebook_url(str(tmp_path)) is None
-
-
 def test_slide_ordering_is_preserved(tmp_path):
     paths = [str(tmp_path / f"scene_{index:02d}.png") for index in range(1, 9)]
     slides = NarrationBuilder().build(request_fixture(), paths)
@@ -233,11 +224,8 @@ def test_multi_slide_composition_and_final_validation(tmp_path, monkeypatch):
 
 
 def test_generation_failure_never_returns_completed(monkeypatch, tmp_path):
-    async def fail_notebook(self, file_path, prompt, target_dir):
-        raise NotebookLMGenerationError("automation unavailable")
-
     monkeypatch.setattr(settings, "TEMP_DIR", str(tmp_path))
-    monkeypatch.setattr(NotebookLMService, "run_pipeline", fail_notebook)
+    patch_notebooklm(monkeypatch, fail_with=NotebookLMGenerationError("automation unavailable"))
     with pytest.raises(Exception) as raised:
         asyncio.run(endpoints.generate_story(request_fixture("failure-story")))
     assert getattr(raised.value, "detail", "") == NotebookLMGenerationError.user_message
@@ -247,12 +235,7 @@ def test_generation_failure_never_returns_completed(monkeypatch, tmp_path):
 def test_insufficient_slide_count_retries_once_then_fails(monkeypatch, tmp_path):
     artifact = tmp_path / "short.pdf"
     artifact.write_bytes(b"%PDF" + b"x" * 12_000)
-    attempts = 0
-
-    async def fake_notebook(self, file_path, prompt, target_dir):
-        nonlocal attempts
-        attempts += 1
-        return str(artifact)
+    submits = []
 
     async def four_slides(presentation_path, output_dir):
         return [str(tmp_path / f"scene_{index:02d}.png") for index in range(1, 5)]
@@ -260,13 +243,13 @@ def test_insufficient_slide_count_retries_once_then_fails(monkeypatch, tmp_path)
     monkeypatch.setattr(settings, "TEMP_DIR", str(tmp_path / "work"))
     monkeypatch.setattr(settings, "MIN_SLIDES", 8)
     monkeypatch.setattr(settings, "GENERATION_RETRY_LIMIT", 1)
-    monkeypatch.setattr(NotebookLMService, "run_pipeline", fake_notebook)
+    patch_notebooklm(monkeypatch, artifact, submits)
     monkeypatch.setattr(endpoints.slide_extractor, "extract_slides", four_slides)
     monkeypatch.setattr(endpoints.slide_extractor, "extract_slide_texts", lambda path: [""] * 4)
 
     with pytest.raises(Exception) as raised:
         asyncio.run(endpoints.generate_story(request_fixture("short-story")))
-    assert attempts == 2
+    assert len(submits) == 2
     assert getattr(raised.value, "detail", "") == NotebookLMGenerationError.user_message
 
 
@@ -278,9 +261,6 @@ def test_successful_eight_slide_generation(monkeypatch, tmp_path):
         visuals.append(str(path))
     artifact = tmp_path / "notebooklm_presentation.pdf"
     artifact.write_bytes(b"%PDF synthetic NotebookLM artifact" + b"x" * 12_000)
-
-    async def fake_notebook(self, file_path, prompt, target_dir):
-        return str(artifact)
 
     async def fake_extract(presentation_path, output_dir):
         return visuals
@@ -304,7 +284,7 @@ def test_successful_eight_slide_generation(monkeypatch, tmp_path):
     monkeypatch.setattr(settings, "MIN_SLIDE_DURATION", 0.55)
     monkeypatch.setattr(settings, "SLIDE_PADDING", 0.05)
     monkeypatch.setattr(settings, "MIN_VIDEO_BYTES", 1000)
-    monkeypatch.setattr(NotebookLMService, "run_pipeline", fake_notebook)
+    patch_notebooklm(monkeypatch, artifact)
     monkeypatch.setattr(endpoints.slide_extractor, "extract_slides", fake_extract)
     monkeypatch.setattr(endpoints.slide_extractor, "extract_slide_texts", lambda path: ["فكرة تعليمية"] * 8)
     monkeypatch.setattr(endpoints.narration_service, "generate_narration", fake_narration)
