@@ -14,7 +14,7 @@ const PYTHON_BACKEND_URL = process.env.PYTHON_BACKEND_URL || "http://127.0.0.1:8
 const REQUEST_TIMEOUT_MS = 10_000;
 
 // "failed" cannot be fixed by retrying; "dead_letter" used every attempt and waits for an admin.
-export type JobState = "queued" | "running" | "completed" | "failed" | "dead_letter";
+export type JobState = "queued" | "running" | "completed" | "failed" | "dead_letter" | "cancelled";
 
 interface PythonScene {
   scene_number?: number;
@@ -42,6 +42,8 @@ export interface JobView {
   step?: string | null;
   error?: string | null;
   result?: JobResult | null;
+  // Set when the same request was already queued or running, so nothing new was queued.
+  duplicate?: boolean;
 }
 
 type JobInput = StoryInput & { custom_instructions?: string };
@@ -61,10 +63,11 @@ async function backendFetch(path: string, init?: RequestInit): Promise<Response>
   }
 }
 
-export function buildJobPayload(storyId: string, jobId: string, input: JobInput) {
+export function buildJobPayload(storyId: string, jobId: string, userId: string, input: JobInput) {
   return {
     job_id: jobId,
     story_id: storyId,
+    user_id: userId,
     story_title: input.title,
     story_idea: input.topic,
     education_level: input.stage,
@@ -81,15 +84,60 @@ export function buildJobPayload(storyId: string, jobId: string, input: JobInput)
   };
 }
 
-/** Queue a generation Job. Throws an AppError, with an Arabic message, if it was not accepted. */
-export async function enqueueStoryJob(storyId: string, jobId: string, input: JobInput): Promise<void> {
+async function backendDetail(response: Response): Promise<string | undefined> {
+  try {
+    const body = (await response.json()) as { detail?: unknown };
+    return typeof body.detail === "string" ? body.detail : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+export interface EnqueueOutcome {
+  /** True when the same request was already queued or running, so no new Job was made. */
+  duplicate: boolean;
+  /** The story the Job belongs to: the existing one for a duplicate, otherwise the one just queued. */
+  storyId: string;
+}
+
+/**
+ * Queue a generation Job for a user. Throws an AppError, with an Arabic message, if it was not
+ * accepted: 429 when the user has too many active Jobs, 503 when the queue's database is down.
+ */
+export async function enqueueStoryJob(
+  storyId: string,
+  jobId: string,
+  userId: string,
+  input: JobInput,
+): Promise<EnqueueOutcome> {
   const response = await backendFetch("/jobs", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(buildJobPayload(storyId, jobId, input)),
+    body: JSON.stringify(buildJobPayload(storyId, jobId, userId, input)),
   });
   if (response.status === 503) throw AppError.databaseUnavailable(QUEUE_UNAVAILABLE);
+  if (response.status === 429) {
+    throw AppError.rateLimited((await backendDetail(response)) ?? "لديك عدد كبير من الطلبات قيد المعالجة. يرجى المحاولة لاحقًا.");
+  }
   if (!response.ok) throw AppError.providerFailure("تعذر إضافة طلب التوليد إلى قائمة الانتظار.");
+  const job = (await response.json()) as JobView;
+  return { duplicate: Boolean(job.duplicate), storyId: job.story_id ?? storyId };
+}
+
+/** Cancel a Job that is still waiting in the queue. A running Job cannot be cancelled. */
+export async function cancelStoryJob(jobId: string, userId: string): Promise<void> {
+  const response = await backendFetch(`/jobs/${encodeURIComponent(jobId)}/cancel`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id: userId }),
+  });
+  if (response.ok) return;
+  const detail = await backendDetail(response);
+  if (response.status === 404) throw AppError.notFound(detail);
+  if (response.status === 403) throw AppError.authorization(detail);
+  if (response.status === 409) throw AppError.conflict(detail);
+  if (response.status === 503) throw AppError.databaseUnavailable(QUEUE_UNAVAILABLE);
+  throw AppError.providerFailure("تعذر إلغاء طلب التوليد.");
 }
 
 /** The Job, or null if the backend does not know it. */
@@ -179,7 +227,7 @@ export async function syncStoryWithJob(story: StoryDocument, userId: string): Pr
       scenes,
     });
     await completeStory(story._id, assets);
-  } else if (job.state === "failed" || job.state === "dead_letter") {
+  } else if (job.state === "failed" || job.state === "dead_letter" || job.state === "cancelled") {
     await failStory(story._id, job.error || "توقف التوليد بسبب خطأ.");
   } else if (job.state === "queued" && job.step && story.currentStep !== job.step) {
     // Queued again after a failed stage: say so instead of freezing on the old step.

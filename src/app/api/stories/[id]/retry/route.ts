@@ -24,7 +24,10 @@ export async function POST(request: Request, context: { params: Promise<{ id: st
     if (!(await resetStoryForRetry(id, userId, jobId))) throw AppError.conflict("تعذر تجهيز القصة لإعادة المحاولة.");
 
     try {
-      await enqueueStoryJob(id, jobId, story.input);
+      const outcome = await enqueueStoryJob(id, jobId, userId, story.input);
+      if (outcome.duplicate) {
+        throw AppError.conflict("يوجد طلب مطابق قيد المعالجة بالفعل.");
+      }
     } catch (err) {
       const message = err instanceof AppError ? err.message : "تعذر إضافة طلب التوليد إلى قائمة الانتظار.";
       await failStory(id, message).catch(() => {});

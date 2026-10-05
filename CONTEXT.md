@@ -38,5 +38,14 @@ Job state when NotebookLM refuses new Slide Decks for the day. Jobs wait here un
 **Dead letter**:
 Final state of a Job that used all its retries. Kept with its error and evidence so an admin can requeue it.
 
+**Active Job**:
+A Job that is queued or running. A user may have at most two at a time (a soft limit, until real accounts replace the anonymous cookie).
+
+**Duplicate request**:
+A story request identical to one that is still an Active Job for the same user. It is not queued twice; the user is shown the existing Story.
+
+**Cancelled**:
+Final state of a Job its user cancelled while it was still waiting. A Job a worker has started cannot be cancelled.
+
 **Scheduled generation**:
 A possible future feature: the user chooses when a Story is generated. Not built.

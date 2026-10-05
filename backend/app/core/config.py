@@ -22,6 +22,8 @@ class Settings(BaseSettings):
     JOB_WORKER_ENABLED: bool = os.getenv("JOB_WORKER_ENABLED", "true").lower() == "true"
     JOB_POLL_INTERVAL_SECONDS: float = float(os.getenv("JOB_POLL_INTERVAL_SECONDS", "2"))
     JOB_STORE_TIMEOUT_MS: int = int(os.getenv("JOB_STORE_TIMEOUT_MS", "2000"))
+    # Soft limit per user (the user id comes from the web app): queued plus running Jobs.
+    JOB_MAX_ACTIVE_PER_USER: int = int(os.getenv("JOB_MAX_ACTIVE_PER_USER", "2"))
     # A worker holds a Job with a lease it refreshes every heartbeat. If it dies, the lease
     # runs out and another worker takes the Job over. The lease must be much longer than the heartbeat.
     JOB_LEASE_SECONDS: float = float(os.getenv("JOB_LEASE_SECONDS", "120"))

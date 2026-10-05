@@ -18,6 +18,7 @@ import {
 } from "@/lib/story-repository";
 import {
   buildJobPayload,
+  cancelStoryJob,
   enqueueStoryJob,
   fetchJob,
   isAwaitingJob,
@@ -77,9 +78,9 @@ beforeEach(() => {
 afterEach(() => vi.unstubAllGlobals());
 
 describe("enqueueStoryJob", () => {
-  it("posts the story to the job queue under the given ids", async () => {
-    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "queued" }, 202));
-    await enqueueStoryJob("s1", "j1", input);
+  it("posts the story to the job queue under the given ids, for the given user", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", story_id: "s1", state: "queued" }, 202));
+    const outcome = await enqueueStoryJob("s1", "j1", "u1", input);
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toBe("http://127.0.0.1:8000/jobs");
@@ -88,6 +89,7 @@ describe("enqueueStoryJob", () => {
     expect(sent).toMatchObject({
       job_id: "j1",
       story_id: "s1",
+      user_id: "u1",
       story_title: "قصة الشمس",
       story_idea: "كيف تشرق الشمس",
       education_level: "المرحلة الابتدائية",
@@ -95,26 +97,39 @@ describe("enqueueStoryJob", () => {
       output_type: "نص + صوت + فيديو",
       custom_instructions: "بدون موسيقى",
     });
+    expect(outcome).toEqual({ duplicate: false, storyId: "s1" });
   });
 
   it("maps every story field the backend expects", () => {
-    expect(Object.keys(buildJobPayload("s1", "j1", input)).sort()).toEqual(
+    expect(Object.keys(buildJobPayload("s1", "j1", "u1", input)).sort()).toEqual(
       [
         "custom_instructions", "education_level", "job_id", "learning_needs", "learning_objectives",
         "narrator_gender", "output_type", "story_duration", "story_id", "story_idea", "story_style",
-        "story_title", "student_age", "student_level", "voice_tone",
+        "story_title", "student_age", "student_level", "user_id", "voice_tone",
       ].sort(),
     );
   });
 
+  it("reports a request that is already queued as a duplicate of the existing story", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j0", story_id: "s0", state: "queued", duplicate: true }, 200));
+    expect(await enqueueStoryJob("s1", "j1", "u1", input)).toEqual({ duplicate: true, storyId: "s0" });
+  });
+
+  it("refuses with 429 and the queue's own Arabic message when the user has too many active jobs", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "وصلت إلى الحد الأقصى للطلبات قيد المعالجة (2)." }, 429));
+    const error = await enqueueStoryJob("s1", "j1", "u1", input).catch((e) => e);
+    expect(error).toBeInstanceOf(AppError);
+    expect(error).toMatchObject({ statusCode: 429, code: "RATE_LIMITED", message: "وصلت إلى الحد الأقصى للطلبات قيد المعالجة (2)." });
+  });
+
   it("refuses with 503 when the queue's database is down", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ detail: "down" }, 503));
-    await expect(enqueueStoryJob("s1", "j1", input)).rejects.toMatchObject({ statusCode: 503, code: "DATABASE_UNAVAILABLE" });
+    await expect(enqueueStoryJob("s1", "j1", "u1", input)).rejects.toMatchObject({ statusCode: 503, code: "DATABASE_UNAVAILABLE" });
   });
 
   it("reports an unreachable backend as a provider failure in Arabic", async () => {
     fetchMock.mockRejectedValue(new Error("ECONNREFUSED"));
-    const error = await enqueueStoryJob("s1", "j1", input).catch((e) => e);
+    const error = await enqueueStoryJob("s1", "j1", "u1", input).catch((e) => e);
     expect(error).toBeInstanceOf(AppError);
     expect(error.statusCode).toBe(502);
     expect(error.message).toContain("خدمة التوليد");
@@ -122,7 +137,31 @@ describe("enqueueStoryJob", () => {
 
   it("does not treat other errors as success", async () => {
     fetchMock.mockResolvedValue(jsonResponse({ detail: "bad" }, 422));
-    await expect(enqueueStoryJob("s1", "j1", input)).rejects.toMatchObject({ statusCode: 502 });
+    await expect(enqueueStoryJob("s1", "j1", "u1", input)).rejects.toMatchObject({ statusCode: 502 });
+  });
+});
+
+describe("cancelStoryJob", () => {
+  it("asks the queue to cancel the job for the user", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "cancelled" }));
+    await cancelStoryJob("j1", "u1");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8000/jobs/j1/cancel");
+    expect(JSON.parse(init.body)).toEqual({ user_id: "u1" });
+  });
+
+  it("refuses a job that is already running, with the queue's message", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ detail: "لا يمكن إلغاء مهمة قيد التنفيذ." }, 409));
+    await expect(cancelStoryJob("j1", "u1")).rejects.toMatchObject({ statusCode: 409, message: "لا يمكن إلغاء مهمة قيد التنفيذ." });
+  });
+
+  it("maps the other refusals", async () => {
+    fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "x" }, 404));
+    await expect(cancelStoryJob("j1", "u1")).rejects.toMatchObject({ statusCode: 404 });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "x" }, 403));
+    await expect(cancelStoryJob("j1", "u1")).rejects.toMatchObject({ statusCode: 403 });
+    fetchMock.mockResolvedValueOnce(jsonResponse({ detail: "x" }, 503));
+    await expect(cancelStoryJob("j1", "u1")).rejects.toMatchObject({ statusCode: 503 });
   });
 });
 
@@ -213,6 +252,12 @@ describe("syncStoryWithJob", () => {
     await syncStoryWithJob(story({ status: "generating" }), "u1");
     expect(failStory).toHaveBeenCalledWith("s1", "تعذر إنشاء العرض التعليمي");
     expect(completeStory).not.toHaveBeenCalled();
+  });
+
+  it("treats a cancelled job as a stopped story", async () => {
+    fetchMock.mockResolvedValue(jsonResponse({ job_id: "j1", state: "cancelled", error: "أُلغي طلب التوليد." }));
+    await syncStoryWithJob(story({ status: "queued" }), "u1");
+    expect(failStory).toHaveBeenCalledWith("s1", "أُلغي طلب التوليد.");
   });
 
   it("treats a dead-lettered job as a failed story, with the job's error", async () => {

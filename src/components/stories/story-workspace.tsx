@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertCircle, CheckCircle2, ImageIcon, LoaderCircle, Mic2, RefreshCw, Video } from "lucide-react";
+import { AlertCircle, CheckCircle2, ImageIcon, LoaderCircle, Mic2, RefreshCw, Video, XCircle } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useState } from "react";
 import { Card, SectionTitle } from "@/components/ui/card";
@@ -50,6 +50,7 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
   const [loadError, setLoadError] = useState<string>();
   const [refreshKey, setRefreshKey] = useState(0);
   const [isRetrying, setIsRetrying] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [isRebuildingVideo, setIsRebuildingVideo] = useState(false);
 
   useEffect(() => {
@@ -99,6 +100,22 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
     }
   }
 
+  async function cancelGeneration() {
+    setIsCancelling(true);
+    setLoadError(undefined);
+    try {
+      const response = await fetch(`/api/stories/${storyId}/cancel`, { method: "POST" });
+      const payload = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(typeof payload.error?.message === "string" ? payload.error.message : "تعذر إلغاء الطلب.");
+      console.info(`[Sard][UI] أُلغي طلب توليد القصة ${storyId}.`);
+      setRefreshKey((value) => value + 1);
+    } catch (error) {
+      setLoadError(error instanceof Error ? error.message : "تعذر إلغاء الطلب.");
+    } finally {
+      setIsCancelling(false);
+    }
+  }
+
   async function rebuildVideoDuration() {
     setIsRebuildingVideo(true);
     setLoadError(undefined);
@@ -122,7 +139,7 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
   return (
     <div className="space-y-6">
       <SectionTitle title={details.title} subtitle={details.subtitle} />
-      <GenerationStatus story={story} onRetry={retryGeneration} isRetrying={isRetrying} />
+      <GenerationStatus story={story} onRetry={retryGeneration} isRetrying={isRetrying} onCancel={cancelGeneration} isCancelling={isCancelling} />
       {view === "storyboard" ? <Storyboard story={story} /> : null}
       {view === "audio" ? <AudioWorkspace story={story} /> : null}
       {view === "video" ? <VideoWorkspace story={story} onRebuildDuration={rebuildVideoDuration} isRebuilding={isRebuildingVideo} /> : null}
@@ -131,7 +148,7 @@ export function StoryWorkspace({ storyId, view }: { storyId: string; view: Works
   );
 }
 
-function GenerationStatus({ story, onRetry, isRetrying }: { story: WorkspaceStory; onRetry: () => void; isRetrying: boolean }) {
+function GenerationStatus({ story, onRetry, isRetrying, onCancel, isCancelling }: { story: WorkspaceStory; onRetry: () => void; isRetrying: boolean; onCancel: () => void; isCancelling: boolean }) {
   const isFailed = story.status === "failed";
   const complete = story.status === "completed";
   return (
@@ -144,7 +161,7 @@ function GenerationStatus({ story, onRetry, isRetrying }: { story: WorkspaceStor
             <p className={isFailed ? "mt-1 text-sm font-bold text-destructive" : "mt-1 text-sm font-bold text-muted-foreground"}>{isFailed ? story.error : story.currentStep}</p>
           </div>
         </div>
-        <div className="flex items-center gap-3"><span className={`rounded-full px-4 py-2 text-sm font-bold ${isFailed ? "bg-destructive/10 text-destructive" : complete ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{statusLabel(story.status)} · {story.progress}%</span>{isFailed ? <ArabicButton type="button" variant="outline" disabled={isRetrying} onClick={onRetry} icon={<RefreshCw className={`h-4 w-4 ${isRetrying ? "animate-spin" : ""}`} />}>{isRetrying ? "جارٍ إعادة المحاولة…" : "إعادة المحاولة"}</ArabicButton> : null}</div>
+        <div className="flex items-center gap-3"><span className={`rounded-full px-4 py-2 text-sm font-bold ${isFailed ? "bg-destructive/10 text-destructive" : complete ? "bg-success/10 text-success" : "bg-primary/10 text-primary"}`}>{statusLabel(story.status)} · {story.progress}%</span>{story.status === "queued" ? <ArabicButton type="button" variant="outline" disabled={isCancelling} onClick={onCancel} icon={<XCircle className="h-4 w-4" />}>{isCancelling ? "جارٍ الإلغاء…" : "إلغاء الطلب"}</ArabicButton> : null}{isFailed ? <ArabicButton type="button" variant="outline" disabled={isRetrying} onClick={onRetry} icon={<RefreshCw className={`h-4 w-4 ${isRetrying ? "animate-spin" : ""}`} />}>{isRetrying ? "جارٍ إعادة المحاولة…" : "إعادة المحاولة"}</ArabicButton> : null}</div>
       </div>
       <div className="mt-5 h-3 overflow-hidden rounded-full bg-muted" aria-label={`التقدم ${story.progress}%`}>
         <div className={isFailed ? "h-full bg-destructive transition-all duration-500" : "h-full bg-gradient-to-l from-primary to-secondary transition-all duration-500"} style={{ width: `${story.progress}%` }} />

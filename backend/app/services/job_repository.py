@@ -1,4 +1,7 @@
+import hashlib
+import json
 import logging
+import re
 import uuid
 from datetime import datetime, timedelta, timezone
 from functools import wraps
@@ -19,6 +22,11 @@ COMPLETED = "completed"
 FAILED = "failed"
 # Gave up after using every attempt on a Stage; kept so an admin can requeue it.
 DEAD_LETTER = "dead_letter"
+# Cancelled by its user while still waiting in the queue.
+CANCELLED = "cancelled"
+
+ACTIVE_STATES = [QUEUED, RUNNING]
+CANCELLED_MESSAGE = "أُلغي طلب التوليد."
 
 WAITING_STEP = "بانتظار إعادة المحاولة..."
 
@@ -29,12 +37,38 @@ class JobStoreUnavailable(RuntimeError):
     """MongoDB could not be reached. Jobs are never kept in memory instead."""
 
 
+class UserJobLimitReached(RuntimeError):
+    """The user already has as many queued or running Jobs as they are allowed."""
+
+    def __init__(self, active: int, limit: int):
+        super().__init__(f"{active} active Jobs, limit {limit}")
+        self.active = active
+        self.limit = limit
+
+
 class LeaseLost(RuntimeError):
     """Another worker has taken this Job over. Whatever this worker was doing no longer counts."""
 
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _normalize(value: Any) -> Any:
+    if isinstance(value, str):
+        return re.sub(r"\s+", " ", value).strip() or None
+    if isinstance(value, list):
+        return [_normalize(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _normalize(item) for key, item in value.items()}
+    return value
+
+
+def fingerprint(request: dict[str, Any]) -> str:
+    """The same story request always gets the same fingerprint: ids are left out, text is tidied."""
+    material = {key: value for key, value in request.items() if key not in {"story_id", "job_id", "user_id"}}
+    encoded = json.dumps(_normalize(material), sort_keys=True, ensure_ascii=False)
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
 def _guarded(method):
@@ -58,6 +92,7 @@ class JobRepository:
 
     def __init__(self, collection) -> None:
         self.collection = collection
+        self._indexes_ready = False
 
     @classmethod
     def connect(cls) -> "JobRepository":
@@ -68,12 +103,78 @@ class JobRepository:
     def ensure_indexes(self) -> None:
         self.collection.create_index([("state", ASCENDING), ("run_after", ASCENDING), ("created_at", ASCENDING)])
         self.collection.create_index([("story_id", ASCENDING)])
+        self.collection.create_index([("user_id", ASCENDING), ("state", ASCENDING)])
+        # Only a Job that is still active carries this key, so at most one active Job per user
+        # can have a given fingerprint even when two submissions arrive at the same moment.
+        self.collection.create_index([("active_fingerprint", ASCENDING)], unique=True, sparse=True)
+        self._indexes_ready = True
+
+    def _ensure_indexes_once(self) -> None:
+        if not self._indexes_ready:
+            self.ensure_indexes()
 
     @_guarded
-    def enqueue(self, story_id: str, request: dict[str, Any], job_id: Optional[str] = None) -> dict[str, Any]:
-        """Store a new queued Job. Enqueueing the same job_id again returns the existing Job."""
+    def submit(
+        self,
+        story_id: str,
+        request: dict[str, Any],
+        user_id: Optional[str] = None,
+        job_id: Optional[str] = None,
+    ) -> tuple[dict[str, Any], bool]:
+        """Queue a Job for a user, with the fairness rules applied.
+
+        Returns (job, duplicate). The same request that is still queued or running is not queued
+        twice: the existing Job comes back with duplicate=True. A user over their limit of active
+        Jobs gets UserJobLimitReached. Without a user_id there are no rules.
+        """
+        if not user_id:
+            return self.enqueue(story_id, request, job_id=job_id), False
+
+        self._ensure_indexes_once()
+        key = f"{user_id}:{fingerprint(request)}"
+        existing = self.collection.find_one({"active_fingerprint": key})
+        if existing is not None:
+            return existing, True
+
+        active = self.collection.count_documents({"user_id": user_id, "state": {"$in": ACTIVE_STATES}})
+        if active >= settings.JOB_MAX_ACTIVE_PER_USER:
+            raise UserJobLimitReached(active, settings.JOB_MAX_ACTIVE_PER_USER)
+
+        job = self._new_job(story_id, request, job_id)
+        job.update({"user_id": user_id, "fingerprint": key.split(":", 1)[1], "active_fingerprint": key})
+        try:
+            self.collection.insert_one(job)
+        except DuplicateKeyError:
+            # Two identical submissions arrived together; the other one won.
+            winner = self.collection.find_one({"active_fingerprint": key}) or self.collection.find_one({"_id": job["_id"]})
+            return winner, True
+        return job, False
+
+    @_guarded
+    def cancel(self, job_id: str, user_id: str) -> str:
+        """Cancel a Job that is still waiting. Returns cancelled, not_found, forbidden or not_cancellable."""
         now = _now()
-        job = {
+        cancelled = self.collection.find_one_and_update(
+            {"_id": job_id, "state": QUEUED, "user_id": user_id},
+            {
+                "$set": {"state": CANCELLED, "error": CANCELLED_MESSAGE, "finished_at": now, "updated_at": now},
+                "$unset": {"lease_until": "", "active_fingerprint": ""},
+            },
+            return_document=ReturnDocument.AFTER,
+        )
+        if cancelled is not None:
+            return "cancelled"
+        job = self.collection.find_one({"_id": job_id})
+        if job is None:
+            return "not_found"
+        if job.get("user_id") != user_id:
+            return "forbidden"
+        return "not_cancellable"
+
+    @staticmethod
+    def _new_job(story_id: str, request: dict[str, Any], job_id: Optional[str]) -> dict[str, Any]:
+        now = _now()
+        return {
             "_id": job_id or str(uuid.uuid4()),
             "story_id": story_id,
             "request": request,
@@ -85,6 +186,11 @@ class JobRepository:
             "created_at": now,
             "updated_at": now,
         }
+
+    @_guarded
+    def enqueue(self, story_id: str, request: dict[str, Any], job_id: Optional[str] = None) -> dict[str, Any]:
+        """Store a new queued Job, with no fairness rules. The same job_id again returns the existing Job."""
+        job = self._new_job(story_id, request, job_id)
         try:
             self.collection.insert_one(job)
         except DuplicateKeyError:
@@ -249,7 +355,7 @@ class JobRepository:
             job_id,
             {
                 "$set": {"state": COMPLETED, "progress": 100, "result": result, "finished_at": now, "updated_at": now},
-                "$unset": {"error": "", "lease_until": ""},
+                "$unset": {"error": "", "lease_until": "", "active_fingerprint": ""},
             },
             worker_id,
         )
@@ -267,7 +373,7 @@ class JobRepository:
         now = _now()
         update: dict[str, Any] = {
             "$set": {"state": state, "error": error, "finished_at": now, "updated_at": now},
-            "$unset": {"lease_until": ""},
+            "$unset": {"lease_until": "", "active_fingerprint": ""},
         }
         if stage:
             update["$push"] = {"failures": self._evidence(stage, error, detail, evidence_dir)}
@@ -314,6 +420,14 @@ class JobRepository:
         if failed_stage:
             update["$set"][f"stages.{failed_stage}.attempts"] = 0
         self.collection.update_one({"_id": job_id}, update)
+        if job.get("user_id") and job.get("fingerprint"):
+            # Back under the duplicate guard, unless the user has meanwhile queued the same request again.
+            try:
+                self.collection.update_one(
+                    {"_id": job_id}, {"$set": {"active_fingerprint": f"{job['user_id']}:{job['fingerprint']}"}}
+                )
+            except DuplicateKeyError:
+                pass
         return True
 
 
