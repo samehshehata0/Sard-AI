@@ -40,7 +40,7 @@ This repo currently contains **two separate, not-yet-merged backends**. Don't as
 6. The pipeline (`backend/app/main.py`, `backend/app/api/endpoints.py`) drives a Playwright automation of Google NotebookLM to generate a slide presentation, extracts slides (`pymupdf`/`python-pptx`), builds narration audio (Google Cloud TTS or the HF/Edge-TTS fallback in `backend/app/services/narration_service.py`), composes video with `ffmpeg` (`video_composer.py`), validates media (`media_validation.py`), and uploads results to ImageKit. Tunable pipeline constants (slide counts, durations, retry limits, video/audio specs) live in `backend/app/core/config.py`, overridable via env vars listed in `.env.example`.
 7. `backend/save_auth.py` produces the Playwright `storage_state.json` NotebookLM login the automation depends on — must be re-run manually when that session expires; there's no auto-refresh.
 
-The old synchronous `POST /generate-story` endpoint still exists (it runs the same Stages once, with no retry); it is retired in a later step. A Job that is claimed and then loses its worker (crash) is not recovered yet.
+The old synchronous `POST /generate-story` endpoint still exists (it runs the same Stages once, with no retry); it is retired in a later step.
 
 ### 2. Documented REST/auth contract (partially implemented, aspirational beyond auth)
 
