@@ -4,9 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
-    "backend": "cd backend && python run.py",
-    "auth": "cd backend && python save_auth.py",
-    "canary": "cd backend && python notebooklm_canary.py",
+    "backend": "node scripts/run-python.mjs run.py",
+    "auth": "node scripts/run-python.mjs save_auth.py",
+    "canary": "node scripts/run-python.mjs notebooklm_canary.py",
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
