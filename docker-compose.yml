@@ -40,6 +40,9 @@ services:
     environment:
       BACKEND_HOST: 0.0.0.0
       BACKEND_RELOAD: "false"
+      # A container has no screen, so the browser must stay headless here whatever .env says. To watch
+      # the browser, run the backend on your machine instead (npm run backend).
+      PLAYWRIGHT_HEADLESS: "true"
       MONGODB_URI: mongodb://mongo:27017
       TEMP_DIR: /data/temp
       NOTEBOOKLM_STORAGE_STATE_PATH: /data/auth/storage_state.json

@@ -1,9 +1,25 @@
 import os
+import sys
 from pathlib import Path
 
 from playwright.sync_api import sync_playwright
 
 from app.core.config import settings
+
+
+def prefer_headless(environ=None, platform=None) -> bool:
+    """Should the login browser run without a window?
+
+    Only when asked to (NOTEBOOKLM_HEADLESS), or on a Linux machine with no display to open a window on.
+    macOS and Windows never set DISPLAY but always have a screen, so a missing DISPLAY there says nothing.
+    """
+    environ = os.environ if environ is None else environ
+    platform = sys.platform if platform is None else platform
+    if environ.get("NOTEBOOKLM_HEADLESS", "").lower() in ("1", "true", "yes"):
+        return True
+    if platform.startswith("linux"):
+        return not (environ.get("DISPLAY") or environ.get("WAYLAND_DISPLAY"))
+    return False
 
 
 def _fill_input(page, selectors, value):
@@ -45,16 +61,12 @@ def ensure_notebooklm_session(storage_path: str | None = None) -> str:
 
     browser = None
     with sync_playwright() as pw:
-        # Decide whether to run headed or headless. If no DISPLAY is present
-        # or the env var NOTEBOOKLM_HEADLESS is set, prefer headless mode.
-        headless_env = os.getenv("NOTEBOOKLM_HEADLESS", "").lower() in ("1", "true", "yes")
-        display = os.getenv("DISPLAY")
-        prefer_headless = headless_env or not display
+        headless = prefer_headless()
 
         for channel in ["chrome", "msedge", None]:
             try:
                 kwargs = {
-                    "headless": prefer_headless is True and True or False,
+                    "headless": headless,
                     "ignore_default_args": ["--enable-automation"],
                     "args": ["--disable-blink-features=AutomationControlled", "--no-sandbox"],
                 }
