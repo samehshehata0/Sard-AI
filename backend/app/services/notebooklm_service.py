@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Optional
 
-from playwright.sync_api import Browser, BrowserContext, Page, sync_playwright
+from playwright.sync_api import Browser, BrowserContext, Page
 
 from app.automation.errors import (
     NeedsLoginError,
@@ -59,6 +59,7 @@ from app.automation.notebooklm_ui import (
 from app.automation.slide_deck import click_generate_now
 from app.automation.steps import check_session, run_step, wait_until, wait_until_stable
 from app.core.config import settings
+from app.services.browser_host import BrowserHost
 
 
 logger = logging.getLogger(__name__)
@@ -89,8 +90,32 @@ def session_file_modified_at() -> Optional[datetime]:
     return datetime.fromtimestamp(max(times), tz=timezone.utc) if times else None
 
 
+def _saved_login_path() -> Optional[str]:
+    return next(
+        (path for path in storage_state_candidates() if os.path.isfile(path) and os.path.getsize(path) > 10),
+        None,
+    )
+
+
+_host: Optional[BrowserHost] = None
+
+
+def get_browser_host() -> BrowserHost:
+    """The one NotebookLM browser for this process, shared by every job."""
+    global _host
+    if _host is None:
+        _host = BrowserHost(
+            storage_path=_saved_login_path,
+            login_modified_at=session_file_modified_at,
+            headless=lambda: settings.PLAYWRIGHT_HEADLESS,
+            recycle_hours=lambda: settings.NOTEBOOKLM_BROWSER_RECYCLE_HOURS,
+        )
+    return _host
+
+
 class NotebookLMService:
-    def __init__(self):
+    def __init__(self, host: Optional[BrowserHost] = None):
+        self.host = host or get_browser_host()
         self.browser: Optional[Browser] = None
         self.context: Optional[BrowserContext] = None
         self.page: Optional[Page] = None
@@ -553,59 +578,39 @@ class NotebookLMService:
 
     @contextmanager
     def _session(self, start_url: str, target_dir: str):
-        """One browser session on NotebookLM, with the login applied and evidence saved on failure.
+        """One visit to NotebookLM in the shared browser, with evidence saved on failure.
 
-        Yields (page, step). The browser is always closed on the way out.
+        Yields (page, step). Must run on the browser thread (see BrowserHost.run). The tab is closed on the
+        way out; the browser itself stays open, signed in, for the next job.
         """
         os.makedirs(target_dir, exist_ok=True)
-        storage_path = self._storage_state_path()
-        if not storage_path:
-            raise NeedsLoginError("NotebookLM authentication is missing; run the repository auth command")
+        with self.host.page() as page:
+            page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
+            wait_until(page, lambda: page_has_landed(page, self.registry), timeout_ms=15_000)
 
-        with sync_playwright() as playwright:
-            try:
-                browser = playwright.chromium.launch(
-                    headless=settings.PLAYWRIGHT_HEADLESS,
-                    ignore_default_args=["--enable-automation"],
-                    args=["--no-sandbox", "--disable-setuid-sandbox"],
+            evidence_dir = os.path.join(target_dir, "notebooklm_artifacts")
+            quota_markers = settings.NOTEBOOKLM_QUOTA_MARKERS
+
+            def step(name, action, **conditions):
+                return run_step(
+                    page,
+                    name,
+                    action,
+                    evidence_dir=evidence_dir,
+                    quota_markers=quota_markers,
+                    **conditions,
                 )
+
+            try:
+                check_session(page, quota_markers)
+                yield page, step
             except Exception as exc:
-                raise TransientStepError(f"Playwright browser launch failed: {exc}") from exc
-
-            try:
-                context = browser.new_context(
-                    storage_state=storage_path,
-                    viewport={"width": 1440, "height": 900},
-                )
-                page = context.new_page()
-                page.goto(start_url, wait_until="domcontentloaded", timeout=45000)
-                wait_until(page, lambda: page_has_landed(page, self.registry), timeout_ms=15_000)
-
-                evidence_dir = os.path.join(target_dir, "notebooklm_artifacts")
-                quota_markers = settings.NOTEBOOKLM_QUOTA_MARKERS
-
-                def step(name, action, **conditions):
-                    return run_step(
-                        page,
-                        name,
-                        action,
-                        evidence_dir=evidence_dir,
-                        quota_markers=quota_markers,
-                        **conditions,
-                    )
-
-                try:
-                    check_session(page, quota_markers)
-                    yield page, step
-                except Exception as exc:
-                    if getattr(exc, "evidence_dir", None) is None:
-                        evidence = capture_evidence(page, evidence_dir, "pipeline", exc)
-                        if isinstance(exc, NotebookLMGenerationError):
-                            exc.evidence_dir = evidence
-                        logger.error("[Sard] NotebookLM evidence saved to: %s", evidence)
-                    raise
-            finally:
-                browser.close()
+                if getattr(exc, "evidence_dir", None) is None:
+                    evidence = capture_evidence(page, evidence_dir, "pipeline", exc)
+                    if isinstance(exc, NotebookLMGenerationError):
+                        exc.evidence_dir = evidence
+                    logger.error("[Sard] NotebookLM evidence saved to: %s", evidence)
+                raise
 
     def _sync_submit(
         self,
@@ -716,7 +721,7 @@ class NotebookLMService:
         notebook_url: Optional[str] = None,
         on_notebook: Optional[Callable[[str], None]] = None,
     ) -> str:
-        return await asyncio.to_thread(self._sync_submit, file_path, prompt, target_dir, notebook_url, on_notebook)
+        return await self.host.run(lambda: self._sync_submit(file_path, prompt, target_dir, notebook_url, on_notebook))
 
     async def collect(self, notebook_url: str, target_dir: str) -> tuple[str, bool]:
-        return await asyncio.to_thread(self._sync_collect, notebook_url, target_dir)
+        return await self.host.run(lambda: self._sync_collect(notebook_url, target_dir))

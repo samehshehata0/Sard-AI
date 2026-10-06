@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from app.api.jobs import get_job_repository, router as jobs_router
 from app.core.config import settings
 from app.services.job_worker import JobWorker
+from app.services.notebooklm_service import get_browser_host
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,6 +45,8 @@ async def lifespan(_app: FastAPI):
             worker.stop()
         for task in tasks:
             task.cancel()
+        # The one shared NotebookLM browser goes away with the app (never blocking the event loop).
+        await asyncio.to_thread(get_browser_host().close)
 
 
 app = FastAPI(
