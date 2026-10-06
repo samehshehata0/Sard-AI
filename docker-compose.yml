@@ -57,7 +57,8 @@ services:
     environment:
       MONGODB_URI: mongodb://mongo:27017
       PYTHON_BACKEND_URL: http://backend:8000
-      NEXT_PUBLIC_API_URL: http://localhost:8000
+      # NEXT_PUBLIC_API_URL is deliberately not set: while it is unset the UI uses its mock data for
+      # the parts of the app that have no real REST API yet (see CLAUDE.md).
     depends_on:
       mongo:
         condition: service_healthy
