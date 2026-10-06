@@ -1,0 +1,11 @@
+# Never bake these into an image: a virtualenv, local temp output, and the saved Google login.
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+temp
+auth
+storage_state.json
+tests
+.env
+.env.*
