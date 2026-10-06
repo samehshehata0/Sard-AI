@@ -9,6 +9,7 @@ from pydantic import BaseModel, field_validator
 from app.core.config import settings
 from app.schemas.story import StoryGenerationRequest
 from app.services import temp_cleanup
+from app.services.session_health import session_health
 from app.services.job_repository import (
     JobRepository,
     JobStoreUnavailable,
@@ -133,6 +134,7 @@ def notebooklm_status(repository: JobRepository = Depends(get_job_repository)):
     try:
         flag = repository.get_service_flag()
         parked = repository.parked_counts()
+        session_state = repository.get_session_state()
     except JobStoreUnavailable:
         raise HTTPException(status_code=503, detail=UNAVAILABLE_MESSAGE)
 
@@ -145,5 +147,11 @@ def notebooklm_status(repository: JobRepository = Depends(get_job_repository)):
         "resume_at": iso(flag.get("resume_at")) if flag else None,
         "message": flag.get("message") if flag else None,
         "parked_jobs": parked,
+        # The saved login: whether it is there and for how long its cookies last, and when it was last used.
+        "session": {
+            **session_health(),
+            "last_checked_at": iso(session_state.get("last_checked_at")),
+            "last_ok_at": iso(session_state.get("last_ok_at")),
+        },
         "action": "run `npm run auth` to log in again" if flag and flag["status"] == "needs_login" else None,
     }

@@ -72,6 +72,15 @@ class Settings(BaseSettings):
     # (narration, video) with another Job's NotebookLM work.
     JOB_WORKER_CONCURRENCY: int = int(os.getenv("JOB_WORKER_CONCURRENCY", "1"))
     NOTEBOOKLM_BROWSER_CONCURRENCY: int = int(os.getenv("NOTEBOOKLM_BROWSER_CONCURRENCY", "1"))
+    # Telling a person that something needs them (the login expired or is about to, the quota ran out).
+    # A JSON POST, so Slack, Discord and Teams webhooks work, plus an optional desktop notification.
+    NOTIFY_WEBHOOK_URL: str = os.getenv("NOTIFY_WEBHOOK_URL", "")
+    NOTIFY_DESKTOP: bool = os.getenv("NOTIFY_DESKTOP", "true").lower() == "true"
+    # Keeping the saved login healthy: how often to check it with a quick visit (0 turns the check off),
+    # and how many days before its cookies expire to start warning.
+    NOTEBOOKLM_SESSION_CHECK_HOURS: float = float(os.getenv("NOTEBOOKLM_SESSION_CHECK_HOURS", "12"))
+    NOTEBOOKLM_SESSION_WARN_DAYS: float = float(os.getenv("NOTEBOOKLM_SESSION_WARN_DAYS", "3"))
+
     # Human-like pacing of the browser automation: short random pauses, a real
     # mouse move before clicks, long text entered in pieces. Off in tests.
     NOTEBOOKLM_HUMAN_PACING: bool = os.getenv("NOTEBOOKLM_HUMAN_PACING", "true").lower() == "true"

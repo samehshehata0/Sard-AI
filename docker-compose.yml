@@ -48,7 +48,8 @@ services:
       NOTEBOOKLM_STORAGE_STATE_PATH: /data/auth/storage_state.json
     volumes:
       - backend_temp:/data/temp
-      - ./backend/auth:/data/auth:ro
+      # Writable on purpose: after every good session the backend saves the refreshed login cookies here.
+      - ./backend/auth:/data/auth
     depends_on:
       mongo:
         condition: service_healthy
