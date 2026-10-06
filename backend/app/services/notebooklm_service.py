@@ -102,15 +102,6 @@ class NotebookLMService:
             if os.path.isfile(path) and os.path.getsize(path) > 10:
                 return path
 
-        try:
-            from save_auth import ensure_notebooklm_session
-
-            generated_path = ensure_notebooklm_session()
-            if generated_path and os.path.isfile(generated_path) and os.path.getsize(generated_path) > 10:
-                return generated_path
-        except Exception as exc:
-            logger.warning("[Sard] NotebookLM auto-authentication failed: %s", exc)
-
         return None
 
     def _handle_dialogs(self, page: Page) -> None:
