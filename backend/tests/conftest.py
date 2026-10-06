@@ -17,3 +17,7 @@ def no_human_pacing(monkeypatch):
     from app.core.config import settings
 
     monkeypatch.setattr(settings, "NOTEBOOKLM_HUMAN_PACING", False)
+    # No real desktop notifications or webhooks, and no background session check opening a real browser.
+    monkeypatch.setattr(settings, "NOTIFY_DESKTOP", False)
+    monkeypatch.setattr(settings, "NOTIFY_WEBHOOK_URL", "")
+    monkeypatch.setattr(settings, "NOTEBOOKLM_SESSION_CHECK_HOURS", 0)

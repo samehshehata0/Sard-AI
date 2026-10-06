@@ -35,6 +35,7 @@ PARKED_STATES = [NEEDS_LOGIN, QUOTA_EXHAUSTED]
 ACTIVE_STATES = [QUEUED, RUNNING, *PARKED_STATES]
 
 SERVICE_FLAG_ID = "notebooklm"
+SESSION_STATE_ID = "notebooklm_session"
 PARKED_STEPS = {
     NEEDS_LOGIN: "بانتظار تسجيل الدخول إلى NotebookLM. سيُستأنف التوليد تلقائيًا بعد تجديد الجلسة.",
     QUOTA_EXHAUSTED: "تم بلوغ الحد اليومي لإنشاء العروض في NotebookLM. سيُستأنف التوليد تلقائيًا عند تجدد الحصة.",
@@ -496,6 +497,15 @@ class JobRepository:
     @_guarded
     def get_service_flag(self) -> Optional[dict[str, Any]]:
         return self.flags.find_one({"_id": SERVICE_FLAG_ID})
+
+    @_guarded
+    def get_session_state(self) -> dict[str, Any]:
+        """When the saved login was last checked or used, and when we last told someone about it."""
+        return self.flags.find_one({"_id": SESSION_STATE_ID}) or {}
+
+    @_guarded
+    def update_session_state(self, **fields: Any) -> None:
+        self.flags.update_one({"_id": SESSION_STATE_ID}, {"$set": fields}, upsert=True)
 
     @_guarded
     def unblock_service(self, kind: str) -> int:

@@ -7,7 +7,7 @@ import socket
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
-from typing import Callable, Optional
+from typing import Awaitable, Callable, Optional
 
 from app.automation.errors import NeedsLoginError, QuotaExhaustedError
 from app.core.config import settings
@@ -20,7 +20,9 @@ from app.services.job_repository import (
     JobStoreUnavailable,
     LeaseLost,
 )
-from app.services.notebooklm_service import session_file_modified_at
+from app.services.notebooklm_service import NotebookLMService, session_file_modified_at
+from app.services.notifier import notify
+from app.services.session_health import session_health
 from app.services.pipeline import InsufficientSlidesError, PipelineContext, StageSpec
 from app.services import temp_cleanup
 
@@ -105,8 +107,13 @@ class JobWorker:
         heartbeat_seconds: Optional[float] = None,
         browser_limiter: Optional[asyncio.Semaphore] = None,
         session_checker: Callable[[], Optional[datetime]] = session_file_modified_at,
+        session_probe: Optional[Callable[[], Awaitable[bool]]] = None,
+        notifier: Callable[[str, str], list] = notify,
     ) -> None:
         self.repository = repository
+        # A quick visit to NotebookLM with the saved login: True if Google still treats it as signed in.
+        self.session_probe = session_probe or (lambda: NotebookLMService().check_session())
+        self.notifier = notifier
         # When the saved NotebookLM login was last written; a newer file means someone logged in again.
         self.session_checker = session_checker
         # Shared by every worker in this process: caps how many NotebookLM browsers are open at once.
@@ -272,16 +279,43 @@ class JobWorker:
             )
             await asyncio.to_thread(self.repository.dead_letter, job_id, error, spec.name, detail, evidence_dir, **write)
 
+    async def _tell_a_person(self, title: str, message: str) -> None:
+        """Notify, without ever letting a failing notification disturb the worker."""
+        try:
+            await asyncio.to_thread(self.notifier, title, message)
+        except Exception as exc:
+            logger.warning("[Sard] Could not send the notification: %s", exc)
+
+    async def _announce_block(self, kind: str, waiting: int, resume_at: Optional[datetime], first: bool) -> None:
+        """Tell a person NotebookLM cannot be used. Only the first Job to find out says so, not every one."""
+        if not first:
+            return
+        if kind == NEEDS_LOGIN:
+            await self._tell_a_person(
+                "NotebookLM login needed",
+                f"The saved NotebookLM login has expired. {waiting} job(s) are waiting, not failed. "
+                "Run `npm run auth` to sign in again; they resume by themselves.",
+            )
+        else:
+            when = resume_at.strftime("%Y-%m-%d %H:%M UTC") if resume_at else "an unknown time"
+            await self._tell_a_person(
+                "NotebookLM quota reached",
+                f"NotebookLM refused new decks. {waiting} job(s) are waiting, not failed, and will be tried again at {when}.",
+            )
+
     async def _park(self, job_id: str, stage: str, exc: Exception) -> None:
         """NotebookLM cannot be used right now: wait instead of failing, and tell everyone waiting."""
         if isinstance(exc, NeedsLoginError):
             kind, resume_at = NEEDS_LOGIN, None
         else:
             kind, resume_at = QUOTA_EXHAUSTED, quota_resume_at(datetime.now(timezone.utc))
+        flag_before = await asyncio.to_thread(self.repository.get_service_flag)
+        first = flag_before is None or flag_before.get("status") != kind
         parked_others = await asyncio.to_thread(self.repository.block_service, kind, str(exc), resume_at)
         await asyncio.to_thread(
             self.repository.park_job, job_id, kind, stage, True, self.worker_id
         )
+        await self._announce_block(kind, parked_others + 1, resume_at, first)
         if kind == NEEDS_LOGIN:
             logger.error(
                 "[Sard] NotebookLM LOGIN EXPIRED: job %s and %s other waiting job(s) are parked, not failed. "
@@ -346,12 +380,77 @@ class JobWorker:
 
         resumed = await asyncio.to_thread(self.repository.unblock_service, flag["status"])
         logger.warning("[Sard] NotebookLM usable again (%s): resumed %s parked job(s)", reason, resumed)
+        await self._tell_a_person("NotebookLM is usable again", f"Resumed {resumed} waiting job(s).")
         return resumed
+
+    async def session_check_if_due(self) -> Optional[str]:
+        """Now and then, check that the saved login is still good, and warn before it is not.
+
+        Reads the cookies' expiry (no browser), and visits NotebookLM with the login (which also refreshes
+        the saved cookies). Finding the login dead flags NotebookLM as needing a login, so waiting jobs
+        are parked and a person is told before more users submit. Returns what it found, or None if not due.
+        """
+        hours = settings.NOTEBOOKLM_SESSION_CHECK_HOURS
+        if hours <= 0:
+            return None
+        now = datetime.now(timezone.utc)
+        state = await asyncio.to_thread(self.repository.get_session_state)
+        last = state.get("last_checked_at")
+        if last is not None:
+            last = last.replace(tzinfo=timezone.utc) if last.tzinfo is None else last
+            if now - last < timedelta(hours=hours):
+                return None
+        # Take the slot first, so several workers do not all check at once.
+        await asyncio.to_thread(self.repository.update_session_state, last_checked_at=now)
+
+        flag = await asyncio.to_thread(self.repository.get_service_flag)
+        if flag and flag.get("status") == NEEDS_LOGIN:
+            return "already_flagged"  # a person has already been told
+
+        health = session_health()
+        if health["state"] in ("missing", "invalid", "expired"):
+            await self._flag_login_needed(f"The saved NotebookLM login is {health['state']}.")
+            return health["state"]
+
+        if health["state"] == "expiring":
+            await self._warn_once_a_day(
+                state,
+                now,
+                "NotebookLM login expires soon",
+                f"The saved NotebookLM login expires in about {health['days_left']} day(s). "
+                "Run `npm run auth` to sign in again before it does.",
+            )
+
+        # A visit with the login. It shares the browser limit with jobs, so it waits its turn.
+        async with (self.browser_limiter or contextlib.nullcontext()):
+            still_good = await self.session_probe()
+        if still_good:
+            await asyncio.to_thread(self.repository.update_session_state, last_ok_at=datetime.now(timezone.utc))
+            return "ok"
+        await self._flag_login_needed("NotebookLM redirected to Google's sign-in page.")
+        return "signed_out"
+
+    async def _flag_login_needed(self, reason: str) -> None:
+        flag_before = await asyncio.to_thread(self.repository.get_service_flag)
+        first = flag_before is None or flag_before.get("status") != NEEDS_LOGIN
+        waiting = await asyncio.to_thread(self.repository.block_service, NEEDS_LOGIN, reason, None)
+        logger.error("[Sard] NotebookLM LOGIN NEEDED (%s): %s waiting job(s) parked. Run `npm run auth`.", reason, waiting)
+        await self._announce_block(NEEDS_LOGIN, waiting, None, first)
+
+    async def _warn_once_a_day(self, state: dict, now: datetime, title: str, message: str) -> None:
+        last = state.get("last_expiry_alert_at")
+        if last is not None:
+            last = last.replace(tzinfo=timezone.utc) if last.tzinfo is None else last
+            if now - last < timedelta(hours=24):
+                return
+        await asyncio.to_thread(self.repository.update_session_state, last_expiry_alert_at=now)
+        await self._tell_a_person(title, message)
 
     async def run_forever(self) -> None:
         while not self._stopping:
             try:
                 await self.resume_if_ready()
+                await self.session_check_if_due()
                 await self.purge_if_due()
                 if not await self.process_one():
                     await asyncio.sleep(self.poll_interval)

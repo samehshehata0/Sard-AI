@@ -588,6 +588,9 @@ class NotebookLMService:
                 try:
                     check_session(page, quota_markers)
                     yield page, step
+                    # The session worked, so Google may have rotated its cookies: keep the fresh ones. This
+                    # is what lets one sign-in last as long as the login really does.
+                    self._save_refreshed_login(context, page, storage_path, quota_markers)
                 except Exception as exc:
                     if getattr(exc, "evidence_dir", None) is None:
                         evidence = capture_evidence(page, evidence_dir, "pipeline", exc)
@@ -597,6 +600,41 @@ class NotebookLMService:
                     raise
             finally:
                 browser.close()
+
+    def _save_refreshed_login(self, context, page: Page, storage_path: str, quota_markers: tuple[str, ...]) -> None:
+        """Write the session's current cookies back to the login file, only if it is still signed in.
+
+        Written to a temporary file and moved into place, so a crash cannot leave a half-written login.
+        Failing to refresh is only logged: the old login file is still there.
+        """
+        try:
+            check_session(page, quota_markers)
+        except Exception:
+            return  # signed out or refused: do not overwrite a login file with one that no longer works
+        temporary = f"{storage_path}.tmp"
+        try:
+            context.storage_state(path=temporary)
+            os.replace(temporary, storage_path)
+            logger.info("[Sard] Saved the refreshed NotebookLM login")
+        except Exception as exc:
+            logger.warning("[Sard] Could not save the refreshed NotebookLM login: %s", exc)
+            try:
+                os.remove(temporary)
+            except OSError:
+                pass
+
+    def _sync_check_session(self) -> bool:
+        """Visit NotebookLM with the saved login. True if Google still treats it as signed in.
+
+        A visit with a working login also refreshes the saved cookies. Only a redirect to Google's
+        sign-in page counts as signed out; anything else is left for the jobs themselves to find out.
+        """
+        try:
+            with self._session(settings.NOTEBOOKLM_URL, os.path.join(settings.TEMP_DIR, "_session_check")):
+                pass
+            return True
+        except NeedsLoginError:
+            return False
 
     def _sync_submit(
         self,
@@ -708,6 +746,9 @@ class NotebookLMService:
         on_notebook: Optional[Callable[[str], None]] = None,
     ) -> str:
         return await asyncio.to_thread(self._sync_submit, file_path, prompt, target_dir, notebook_url, on_notebook)
+
+    async def check_session(self) -> bool:
+        return await asyncio.to_thread(self._sync_check_session)
 
     async def collect(self, notebook_url: str, target_dir: str) -> tuple[str, bool]:
         return await asyncio.to_thread(self._sync_collect, notebook_url, target_dir)
