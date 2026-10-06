@@ -25,7 +25,7 @@ from app.services.notebooklm_service import NotebookLMService
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--notebook-url", help="An existing notebook to check the in-notebook elements on")
-    parser.add_argument("--headed", action="store_true", help="Show the browser window")
+    parser.add_argument("--headed", action="store_true", help="Show the browser window (also shown when PLAYWRIGHT_HEADLESS=false)")
     args = parser.parse_args()
 
     storage_path = NotebookLMService()._storage_state_path()
@@ -36,7 +36,7 @@ def main() -> int:
     registry = build_registry()
     results = []
     with sync_playwright() as playwright:
-        browser = playwright.chromium.launch(headless=not args.headed)
+        browser = playwright.chromium.launch(headless=settings.PLAYWRIGHT_HEADLESS and not args.headed)
         try:
             context = browser.new_context(storage_state=storage_path, viewport={"width": 1440, "height": 900})
             page = context.new_page()
