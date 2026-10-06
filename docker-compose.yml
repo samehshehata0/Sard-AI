@@ -5,13 +5,19 @@
 # Put real settings in .env (see .env.example). The NotebookLM login is made on the host with
 # `npm run auth` and shared with the container through ./backend/auth, so set
 #   NOTEBOOKLM_STORAGE_STATE_PATH=auth/storage_state.json
-# in .env before running it. When the login expires, the jobs wait; run `npm run auth` again and
+# in .env before running it.
+#
+# If port 3000 or 8000 is already used on your machine, publish on other ports without editing this
+# file: set SARD_FRONTEND_PORT and/or SARD_BACKEND_PORT in .env (for example SARD_FRONTEND_PORT=3001).
+# These only choose the port on your machine; they are not the BACKEND_PORT that run.py reads inside
+# the container. When the login expires, the jobs wait; run `npm run auth` again and
 # they resume by themselves.
 
 services:
   mongo:
     image: mongo:7
     restart: unless-stopped
+    command: ["mongod", "--quiet"]
     volumes:
       - mongo_data:/data/db
     healthcheck:
@@ -27,7 +33,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "8000:8000"
+      - "${SARD_BACKEND_PORT:-8000}:8000"
     env_file:
       - path: .env
         required: false
@@ -50,7 +56,7 @@ services:
       dockerfile: Dockerfile
     restart: unless-stopped
     ports:
-      - "3000:3000"
+      - "${SARD_FRONTEND_PORT:-3000}:3000"
     env_file:
       - path: .env
         required: false
