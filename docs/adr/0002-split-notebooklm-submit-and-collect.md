@@ -20,5 +20,5 @@ These figures were gathered by the team, not measured on our account (see issue 
 What follows for the design:
 
 - The quota comes back on a rolling window, so `NOTEBOOKLM_QUOTA_RESET_UTC` (a fixed daily time) stays empty and parked Jobs are retried by probing (`NOTEBOOKLM_QUOTA_PROBE_MINUTES`).
-- One free account is enough only if requests are spread across the day. If many users generate at once, the queue only moves the waiting around; a paid plan or a pool of accounts is what adds capacity. That decision is deferred until real usage and the measured limits are known.
+- One free account is enough only if requests are spread across the day. The MVP is sized on that assumption: the team expects its users, about 70 a day, to generate throughout the day and not all at once. If that proves wrong, for example many users generating within the same few hours, revisit a paid plan or a pool of accounts. If many users generate at once, the queue only moves the waiting around; a paid plan or a pool of accounts is what adds capacity. That decision is deferred until real usage and the measured limits are known.
 - The wording NotebookLM shows when the budget runs out is still unknown, so quota detection (`NOTEBOOKLM_QUOTA_MARKERS`) is off until it is captured.
