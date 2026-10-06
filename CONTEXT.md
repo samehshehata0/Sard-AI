@@ -33,7 +33,13 @@ The two halves of the NotebookLM Stage. Submit drives the browser to start gener
 Job state when the NotebookLM session has expired. Jobs wait here, not failed, until a person logs in again.
 
 **Quota exhausted**:
-Job state when NotebookLM refuses new Slide Decks for the day. Jobs wait here until the quota resets.
+Job state when NotebookLM refuses new Slide Decks because the account's usage budget is used up. Jobs wait here until the budget comes back.
+
+**Usage budget**:
+The metered allowance of a NotebookLM account that Slide Decks draw on. On a free account it refreshes on a rolling window of about 5 hours (not at a fixed time of day) and covers roughly 10 to 15 decks per window. These figures are reported, not yet measured.
+
+**Slide cap**:
+The most slides NotebookLM puts in one deck, about 20. Sard asks for 8 to 16.
 
 **Dead letter**:
 Final state of a Job that used all its retries. Kept with its error and evidence so an admin can requeue it.
