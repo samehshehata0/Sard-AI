@@ -1,4 +1,5 @@
 import os
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
@@ -10,7 +11,6 @@ from app.automation.notebooklm_ui import (
     GENERATING_INDICATOR,
     SOURCE_TITLE,
 )
-from app.services import notebooklm_service
 from app.services.notebooklm_service import NotebookLMService
 
 from tests.test_automation_steps import FakePage
@@ -29,47 +29,29 @@ class FakePageWithGoto(FakePage):
         self.visited.append(url)
 
 
-class FakeContext:
+class FakeHost:
+    """Stands in for the shared browser: hands out the fake page and notes that the tab was closed."""
+
     def __init__(self, page):
         self._page = page
+        self.tab_closed = False
+        self.tabs_opened = 0
 
-    def new_page(self):
-        return self._page
-
-
-class FakeBrowser:
-    def __init__(self, page):
-        self._page = page
-        self.closed = False
-
-    def new_context(self, **kwargs):
-        return FakeContext(self._page)
-
-    def close(self):
-        self.closed = True
-
-
-class FakePlaywright:
-    def __init__(self, browser):
-        self.chromium = self
-        self._browser = browser
-
-    def launch(self, **kwargs):
-        return self._browser
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, *args):
-        return False
+    @contextmanager
+    def page(self):
+        self.tabs_opened += 1
+        self.tab_closed = False
+        try:
+            yield self._page
+        finally:
+            self.tab_closed = True
 
 
 @pytest.fixture
 def flow(tmp_path, monkeypatch):
     page = FakePageWithGoto()
-    browser = FakeBrowser(page)
-    monkeypatch.setattr(notebooklm_service, "sync_playwright", lambda: FakePlaywright(browser))
-    service = NotebookLMService()
+    browser = FakeHost(page)  # the shared browser; `browser.tab_closed` says the tab was closed afterwards
+    service = NotebookLMService(host=browser)
     calls = []
     monkeypatch.setattr(service, "_storage_state_path", lambda: "state.json")
     monkeypatch.setattr(service, "_page_has_notebook_editor", lambda p: True)
@@ -99,7 +81,7 @@ def test_submit_creates_the_notebook_adds_the_source_and_asks_for_the_deck(flow)
     service, page, browser, calls, source, target = flow
     assert service._sync_submit(source, "prompt", target) == NOTEBOOK
     assert calls == ["create_notebook", "dismiss", "upload", "indexing", "request"]  # and nothing is downloaded
-    assert browser.closed is True
+    assert browser.tab_closed is True
 
 
 def test_submit_reports_the_notebook_url_as_soon_as_the_notebook_exists(flow):
@@ -143,7 +125,7 @@ def test_a_failing_submit_step_is_typed_names_the_step_and_saves_evidence(flow):
     with pytest.raises(TransientStepError) as excinfo:
         service._sync_submit(source, "prompt", target)
     assert excinfo.value.evidence_dir == os.path.join(target, "notebooklm_artifacts", "request_slide_deck")
-    assert browser.closed is True
+    assert browser.tab_closed is True
 
 
 def test_expired_login_on_arrival_is_needs_login_with_evidence(flow):
@@ -172,7 +154,7 @@ def test_collect_opens_the_notebook_downloads_the_deck_and_then_deletes_the_note
     assert page.visited == [NOTEBOOK]
     assert calls == ["download", "delete"]  # the notebook is deleted only after the download
     assert "create_notebook" not in calls and "request" not in calls
-    assert browser.closed is True
+    assert browser.tab_closed is True
 
 
 def test_a_failed_notebook_deletion_does_not_fail_collect(flow, monkeypatch):

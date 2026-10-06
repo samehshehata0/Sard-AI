@@ -74,6 +74,10 @@ class Settings(BaseSettings):
     # (narration, video) with another Job's NotebookLM work.
     JOB_WORKER_CONCURRENCY: int = int(os.getenv("JOB_WORKER_CONCURRENCY", "1"))
     NOTEBOOKLM_BROWSER_CONCURRENCY: int = int(os.getenv("NOTEBOOKLM_BROWSER_CONCURRENCY", "1"))
+    # The one shared NotebookLM browser is closed and started again after this many hours, so a Chromium
+    # that has been open for a long time does not slowly leak memory (0 = never).
+    NOTEBOOKLM_BROWSER_RECYCLE_HOURS: float = float(os.getenv("NOTEBOOKLM_BROWSER_RECYCLE_HOURS", "12"))
+
     # Human-like pacing of the browser automation: short random pauses, a real
     # mouse move before clicks, long text entered in pieces. Off in tests.
     NOTEBOOKLM_HUMAN_PACING: bool = os.getenv("NOTEBOOKLM_HUMAN_PACING", "true").lower() == "true"
